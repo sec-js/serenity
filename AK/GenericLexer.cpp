@@ -19,9 +19,6 @@ namespace AK {
 // Consume a number of characters
 StringView GenericLexer::consume(size_t count)
 {
-    if (count == 0)
-        return {};
-
     size_t start = m_index;
     size_t length = min(count, m_input.length() - m_index);
     m_index += length;
@@ -32,9 +29,6 @@ StringView GenericLexer::consume(size_t count)
 // Consume the rest of the input
 StringView GenericLexer::consume_all()
 {
-    if (is_eof())
-        return {};
-
     auto rest = m_input.substring_view(m_index, m_input.length() - m_index);
     m_index = m_input.length();
     return rest;
@@ -51,8 +45,6 @@ StringView GenericLexer::consume_line()
     consume_specific('\r');
     consume_specific('\n');
 
-    if (length == 0)
-        return {};
     return m_input.substring_view(start, length);
 }
 
@@ -64,8 +56,6 @@ StringView GenericLexer::consume_until(char stop)
         m_index++;
     size_t length = m_index - start;
 
-    if (length == 0)
-        return {};
     return m_input.substring_view(start, length);
 }
 
@@ -77,8 +67,6 @@ StringView GenericLexer::consume_until(char const* stop)
         m_index++;
     size_t length = m_index - start;
 
-    if (length == 0)
-        return {};
     return m_input.substring_view(start, length);
 }
 
@@ -90,8 +78,6 @@ StringView GenericLexer::consume_until(StringView stop)
         m_index++;
     size_t length = m_index - start;
 
-    if (length == 0)
-        return {};
     return m_input.substring_view(start, length);
 }
 
@@ -176,6 +162,38 @@ ErrorOr<T> GenericLexer::consume_decimal_integer()
     }
 }
 
+#if !defined(KERNEL)
+LineTrackingLexer::Position LineTrackingLexer::position_for(size_t index) const
+{
+    // Sad case: we have no idea where the nearest newline is, so we have to
+    //           scan ahead a bit.
+    while (index > m_largest_known_line_start_position) {
+        auto next_newline = m_input.find('\n', m_largest_known_line_start_position);
+        if (!next_newline.has_value()) {
+            // No more newlines, add the end of the input as a line start to avoid searching again.
+            m_line_start_positions->insert(m_input.length(), m_line_start_positions->size());
+            m_largest_known_line_start_position = m_input.length();
+            break;
+        }
+        m_line_start_positions->insert(next_newline.value() + 1, m_line_start_positions->size());
+        m_largest_known_line_start_position = next_newline.value() + 1;
+    }
+    // We should always have at least the first line start position.
+    auto previous_line_it = m_line_start_positions->find_largest_not_above_iterator(index);
+    auto previous_line_index = previous_line_it.key();
+
+    auto line = *previous_line_it;
+    auto column = index - previous_line_index;
+    if (line == 0) {
+        // First line, take into account the start position.
+        column += m_first_line_start_position.column;
+    }
+
+    line += m_first_line_start_position.line;
+    return { index, line, column };
+}
+#endif
+
 template ErrorOr<u8> GenericLexer::consume_decimal_integer<u8>();
 template ErrorOr<i8> GenericLexer::consume_decimal_integer<i8>();
 template ErrorOr<u16> GenericLexer::consume_decimal_integer<u16>();
@@ -184,6 +202,9 @@ template ErrorOr<u32> GenericLexer::consume_decimal_integer<u32>();
 template ErrorOr<i32> GenericLexer::consume_decimal_integer<i32>();
 template ErrorOr<u64> GenericLexer::consume_decimal_integer<u64>();
 template ErrorOr<i64> GenericLexer::consume_decimal_integer<i64>();
+#ifdef AK_OS_MACOS
+template ErrorOr<size_t> GenericLexer::consume_decimal_integer<size_t>();
+#endif
 
 #ifndef KERNEL
 Optional<ByteString> GenericLexer::consume_and_unescape_string(char escape_char)

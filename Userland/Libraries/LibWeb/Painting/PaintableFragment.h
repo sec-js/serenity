@@ -14,7 +14,8 @@
 namespace Web::Painting {
 
 class PaintableFragment {
-    friend class ViewportPaintable;
+    friend class InlinePaintable;
+    friend class PaintableWithLines;
 
 public:
     explicit PaintableFragment(Layout::LineBoxFragment const&);
@@ -38,14 +39,17 @@ public:
 
     CSSPixelRect const absolute_rect() const;
 
-    Vector<Gfx::DrawGlyphOrEmoji> const& glyph_run() const { return m_glyph_run; }
+    RefPtr<Gfx::GlyphRun> glyph_run() const { return m_glyph_run; }
 
     CSSPixelRect selection_rect(Gfx::Font const&) const;
+    CSSPixelRect range_rect(Gfx::Font const&, DOM::Range const&) const;
 
     CSSPixels width() const { return m_size.width(); }
     CSSPixels height() const { return m_size.height(); }
 
     int text_index_at(CSSPixels) const;
+
+    StringView string_view() const;
 
 private:
     JS::NonnullGCPtr<Layout::Node const> m_layout_node;
@@ -55,9 +59,8 @@ private:
     int m_start;
     int m_length;
     Painting::BorderRadiiData m_border_radii_data;
-    Vector<Gfx::DrawGlyphOrEmoji> m_glyph_run;
+    RefPtr<Gfx::GlyphRun> m_glyph_run;
     Vector<ShadowData> m_shadows;
-    bool m_contained_by_inline_node { false };
 };
 
 }

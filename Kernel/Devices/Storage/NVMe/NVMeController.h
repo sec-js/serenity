@@ -8,7 +8,6 @@
 
 #include <AK/OwnPtr.h>
 #include <AK/Time.h>
-#include <AK/Tuple.h>
 #include <AK/Types.h>
 #include <Kernel/Bus/PCI/Device.h>
 #include <Kernel/Devices/Storage/NVMe/NVMeDefinitions.h>
@@ -32,14 +31,12 @@ public:
     virtual StringView device_name() const override { return "NVMeController"sv; }
 
 protected:
-    ErrorOr<void> reset() override;
-    ErrorOr<void> shutdown() override;
+    ErrorOr<void> reset();
     void complete_current_request(AsyncDeviceRequest::RequestResult result) override;
 
 public:
     ErrorOr<void> reset_controller();
     ErrorOr<void> start_controller();
-    u32 get_admin_q_dept();
 
     u16 submit_admin_command(NVMeSubmission& sub, bool sync = false)
     {
@@ -55,11 +52,17 @@ public:
     void set_admin_queue_ready_flag() { m_admin_queue_ready = true; }
 
 private:
+    struct NSFeatures {
+        u64 namespace_size;
+        u8 lba_size;
+    };
+
     NVMeController(PCI::DeviceIdentifier const&, u32 hardware_relative_controller_id);
 
+    void set_admin_q_depth();
     ErrorOr<void> identify_and_init_namespaces();
     ErrorOr<void> identify_and_init_controller();
-    Tuple<u64, u8> get_ns_features(IdentifyNamespace& identify_data_struct);
+    NSFeatures get_ns_features(IdentifyNamespace& identify_data_struct);
     ErrorOr<void> create_admin_queue(QueueType queue_type);
     ErrorOr<void> create_io_queue(u8 qid, QueueType queue_type);
     void calculate_doorbell_stride()
@@ -71,16 +74,16 @@ private:
 private:
     LockRefPtr<NVMeQueue> m_admin_queue;
     Vector<NonnullLockRefPtr<NVMeQueue>> m_queues;
-    Vector<NonnullLockRefPtr<NVMeNameSpace>> m_namespaces;
+    Vector<NonnullRefPtr<NVMeNameSpace>> m_namespaces;
     Memory::TypedMapping<ControllerRegister volatile> m_controller_regs;
-    RefPtr<Memory::PhysicalPage> m_dbbuf_shadow_page;
-    RefPtr<Memory::PhysicalPage> m_dbbuf_eventidx_page;
+    RefPtr<Memory::PhysicalRAMPage> m_dbbuf_shadow_page;
+    RefPtr<Memory::PhysicalRAMPage> m_dbbuf_eventidx_page;
     bool m_admin_queue_ready { false };
     size_t m_device_count { 0 };
     AK::Duration m_ready_timeout;
     PhysicalAddress m_bar { 0 };
     u8 m_dbl_stride { 0 };
-    PCI::InterruptType m_irq_type;
+    Optional<PCI::InterruptType> m_irq_type;
     QueueType m_queue_type { QueueType::IRQ };
     static Atomic<u8> s_controller_id;
 };

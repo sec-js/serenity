@@ -9,7 +9,9 @@ set(SOURCES
     Bytecode/IdentifierTable.cpp
     Bytecode/Instruction.cpp
     Bytecode/Interpreter.cpp
+    Bytecode/Label.cpp
     Bytecode/RegexTable.cpp
+    Bytecode/ScopedOperand.cpp
     Bytecode/StringTable.cpp
     Console.cpp
     Contrib/Test262/262Object.cpp
@@ -20,12 +22,11 @@ set(SOURCES
     Heap/BlockAllocator.cpp
     Heap/Cell.cpp
     Heap/CellAllocator.cpp
+    Heap/ConservativeVector.cpp
     Heap/Handle.cpp
     Heap/Heap.cpp
     Heap/HeapBlock.cpp
     Heap/MarkedVector.cpp
-    JIT/Compiler.cpp
-    JIT/NativeExecutable.cpp
     Lexer.cpp
     MarkupGenerator.cpp
     Module.cpp
@@ -67,6 +68,7 @@ set(SOURCES
     Runtime/BooleanPrototype.cpp
     Runtime/BoundFunction.cpp
     Runtime/Completion.cpp
+    Runtime/ConsoleObjectPrototype.cpp
     Runtime/ConsoleObject.cpp
     Runtime/DataView.cpp
     Runtime/DataViewConstructor.cpp
@@ -147,6 +149,7 @@ set(SOURCES
     Runtime/IteratorPrototype.cpp
     Runtime/JSONObject.cpp
     Runtime/JobCallback.cpp
+    Runtime/KeyedCollections.cpp
     Runtime/Map.cpp
     Runtime/MapConstructor.cpp
     Runtime/MapIterator.cpp
@@ -238,6 +241,7 @@ set(SOURCES
     Runtime/Temporal/Temporal.cpp
     Runtime/Temporal/TimeZone.cpp
     Runtime/Temporal/TimeZoneConstructor.cpp
+    Runtime/Temporal/TimeZoneMethods.cpp
     Runtime/Temporal/TimeZonePrototype.cpp
     Runtime/Temporal/ZonedDateTime.cpp
     Runtime/Temporal/ZonedDateTimeConstructor.cpp
@@ -269,7 +273,7 @@ set(SOURCES
 )
 
 serenity_lib(LibJS js)
-target_link_libraries(LibJS PRIVATE LibCore LibCrypto LibFileSystem LibRegex LibSyntax LibLocale LibUnicode LibTimeZone LibJIT)
+target_link_libraries(LibJS PRIVATE LibCore LibCrypto LibFileSystem LibRegex LibSyntax LibLocale LibUnicode LibTimeZone)
 if("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86_64")
     target_link_libraries(LibJS PRIVATE LibX86)
 endif()
@@ -280,3 +284,4 @@ if("${CMAKE_SYSTEM_PROCESSOR}" MATCHES "i.86.*")
 endif()
 
 target_compile_options(LibJS PRIVATE -fno-omit-frame-pointer)
+target_link_libraries(LibJS PUBLIC JSClangPlugin)

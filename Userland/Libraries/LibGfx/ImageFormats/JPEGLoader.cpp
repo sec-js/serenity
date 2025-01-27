@@ -182,6 +182,7 @@ public:
         JPEGStream jpeg_stream { move(stream), move(buffer) };
 
         TRY(jpeg_stream.refill_buffer());
+        jpeg_stream.m_offset_from_start = 0;
         return jpeg_stream;
     }
 
@@ -205,8 +206,10 @@ public:
         auto const discarded_from_buffer = min(m_current_size - m_byte_offset, bytes);
         m_byte_offset += discarded_from_buffer;
 
-        if (discarded_from_buffer < bytes)
+        if (discarded_from_buffer < bytes) {
+            m_offset_from_start += bytes - discarded_from_buffer;
             TRY(m_stream->discard(bytes - discarded_from_buffer));
+        }
 
         return {};
     }
@@ -216,8 +219,10 @@ public:
         auto const copied = m_buffer.span().slice(m_byte_offset).copy_trimmed_to(bytes);
         m_byte_offset += copied;
 
-        if (copied < bytes.size())
+        if (copied < bytes.size()) {
+            m_offset_from_start += bytes.size() - copied;
             TRY(m_stream->read_until_filled(bytes.slice(copied)));
+        }
 
         return {};
     }
@@ -229,7 +234,7 @@ public:
 
     u64 byte_offset() const
     {
-        return m_byte_offset;
+        return m_offset_from_start + m_byte_offset;
     }
 
 private:
@@ -242,6 +247,8 @@ private:
     ErrorOr<void> refill_buffer()
     {
         VERIFY(m_byte_offset == m_current_size);
+
+        m_offset_from_start += m_byte_offset;
 
         m_current_size = TRY(m_stream->read_some(m_buffer.span())).size();
         if (m_current_size == 0)
@@ -259,6 +266,7 @@ private:
     Optional<u16> m_saved_marker {};
 
     Vector<u8> m_buffer {};
+    u64 m_offset_from_start { 0 };
     u64 m_byte_offset { buffer_size };
     u64 m_current_size { buffer_size };
 };
@@ -446,7 +454,8 @@ struct JPEGLoadingContext {
 
     State state { State::NotDecoded };
 
-    Array<Optional<Array<u16, 64>>, 4> quantization_tables {};
+    Array<Array<u16, 64>, 4> quantization_tables {};
+    Array<bool, 4> registered_quantization_tables {};
 
     StartOfFrame frame;
     SamplingFactors sampling_factors {};
@@ -826,7 +835,7 @@ static ErrorOr<void> decode_huffman_stream(JPEGLoadingContext& context, Vector<M
             if (result.is_error()) {
                 if constexpr (JPEG_DEBUG) {
                     dbgln("Failed to build Macroblock {}: {}", number_of_mcus_decoded_so_far, result.error());
-                    dbgln("Huffman stream byte offset {}", context.stream.byte_offset());
+                    dbgln("Huffman stream byte offset {:#x}", context.stream.byte_offset());
                 }
                 return result.release_error();
             }
@@ -896,6 +905,7 @@ static inline ErrorOr<Marker> read_marker_at_cursor(JPEGStream& stream)
     if (is_supported_marker(marker))
         return marker;
 
+    dbgln_if(JPEG_DEBUG, "Unsupported marker: {:#04x} around offset {:#x}", marker, stream.byte_offset());
     return Error::from_string_literal("Reached an unsupported marker");
 }
 
@@ -906,6 +916,15 @@ static ErrorOr<u16> read_effective_chunk_size(JPEGStream& stream)
     if (stored_size < 2)
         return Error::from_string_literal("Stored chunk size is too small");
     return stored_size - 2;
+}
+
+static ErrorOr<void> ensure_quantization_tables_are_present(JPEGLoadingContext& context)
+{
+    for (auto const& component : context.current_scan->components) {
+        if (!context.registered_quantization_tables[component.component.quantization_table_id])
+            return Error::from_string_literal("Unknown quantization table id");
+    }
+    return {};
 }
 
 static ErrorOr<void> read_start_of_scan(JPEGStream& stream, JPEGLoadingContext& context)
@@ -946,7 +965,7 @@ static ErrorOr<void> read_start_of_scan(JPEGStream& stream, JPEGLoadingContext& 
         StringBuilder builder;
         TRY(builder.try_append("Components in scan: "sv));
         for (auto const& scan_component : current_scan.components) {
-            TRY(builder.try_append(TRY(String::number(scan_component.component.id))));
+            TRY(builder.try_append(String::number(scan_component.component.id)));
             TRY(builder.try_append(' '));
         }
         dbgln(builder.string_view());
@@ -974,6 +993,8 @@ static ErrorOr<void> read_start_of_scan(JPEGStream& stream, JPEGLoadingContext& 
     }
 
     context.current_scan = move(current_scan);
+
+    TRY(ensure_quantization_tables_are_present(context));
 
     return {};
 }
@@ -1163,7 +1184,7 @@ static ErrorOr<void> read_colour_encoding(JPEGStream& stream, [[maybe_unused]] J
         context.color_transform = ColorTransform::YCCK;
         break;
     default:
-        dbgln("0x{:x} is not a specified transform flag value, ignoring", color_transform);
+        dbgln("{:#x} is not a specified transform flag value, ignoring", color_transform);
     }
 
     return {};
@@ -1310,6 +1331,11 @@ static ErrorOr<void> read_start_of_frame(JPEGStream& stream, JPEGLoadingContext&
 
         dbgln_if(JPEG_DEBUG, "Component subsampling: {}, {}", component.sampling_factors.horizontal, component.sampling_factors.vertical);
 
+        if (component.sampling_factors.horizontal == 0 || component.sampling_factors.horizontal > 4
+            || component.sampling_factors.vertical == 0 || component.sampling_factors.vertical > 4) {
+            return Error::from_string_literal("Invalid subsampling factor values");
+        }
+
         if (i == 0) {
             // By convention, downsampling is applied only on chroma components. So we should
             //  hope to see the maximum sampling factor in the luma component.
@@ -1358,12 +1384,9 @@ static ErrorOr<void> read_quantization_table(JPEGStream& stream, JPEGLoadingCont
             return Error::from_string_literal("Unsupported quantization table id");
         }
 
-        auto& maybe_table = context.quantization_tables[table_id];
+        context.registered_quantization_tables[table_id] = true;
 
-        if (!maybe_table.has_value())
-            maybe_table = Array<u16, 64> {};
-
-        auto& table = maybe_table.value();
+        auto& table = context.quantization_tables[table_id];
 
         for (int i = 0; i < 64; i++) {
             if (element_unit_hint == 0)
@@ -1389,19 +1412,14 @@ static ErrorOr<void> skip_segment(JPEGStream& stream)
     return {};
 }
 
-static ErrorOr<void> dequantize(JPEGLoadingContext& context, Vector<Macroblock>& macroblocks)
+static void dequantize(JPEGLoadingContext& context, Vector<Macroblock>& macroblocks)
 {
     for (u32 vcursor = 0; vcursor < context.mblock_meta.vcount; vcursor += context.sampling_factors.vertical) {
         for (u32 hcursor = 0; hcursor < context.mblock_meta.hcount; hcursor += context.sampling_factors.horizontal) {
             for (u32 i = 0; i < context.components.size(); i++) {
                 auto const& component = context.components[i];
 
-                if (!context.quantization_tables[component.quantization_table_id].has_value()) {
-                    dbgln_if(JPEG_DEBUG, "Unknown quantization table id: {}!", component.quantization_table_id);
-                    return Error::from_string_literal("Unknown quantization table id");
-                }
-
-                auto const& table = context.quantization_tables[component.quantization_table_id].value();
+                auto const& table = context.quantization_tables[component.quantization_table_id];
 
                 for (u32 vfactor_i = 0; vfactor_i < component.sampling_factors.vertical; vfactor_i++) {
                     for (u32 hfactor_i = 0; hfactor_i < component.sampling_factors.horizontal; hfactor_i++) {
@@ -1415,12 +1433,12 @@ static ErrorOr<void> dequantize(JPEGLoadingContext& context, Vector<Macroblock>&
             }
         }
     }
-
-    return {};
 }
 
 static void inverse_dct_8x8(i16* block_component)
 {
+    // Does a 2-D IDCT by doing two 1-D IDCTs as described in https://unix4lyfe.org/dct/
+    // The 1-D DCT idea is described at https://unix4lyfe.org/dct-1d/, read aan.cc from bottom to top.
     static float const m0 = 2.0f * AK::cos(1.0f / 16.0f * 2.0f * AK::Pi<float>);
     static float const m1 = 2.0f * AK::cos(2.0f / 16.0f * 2.0f * AK::Pi<float>);
     static float const m3 = 2.0f * AK::cos(2.0f / 16.0f * 2.0f * AK::Pi<float>);
@@ -1958,7 +1976,7 @@ static ErrorOr<Vector<Macroblock>> construct_macroblocks(JPEGLoadingContext& con
 static ErrorOr<void> decode_jpeg(JPEGLoadingContext& context)
 {
     auto macroblocks = TRY(construct_macroblocks(context));
-    TRY(dequantize(context, macroblocks));
+    dequantize(context, macroblocks);
     inverse_dct(context, macroblocks);
     undo_subsampling(context, macroblocks);
     TRY(handle_color_transform(context, macroblocks));

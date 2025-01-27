@@ -5,9 +5,12 @@
  */
 
 #include <AK/Function.h>
+#include <AK/HashMap.h>
 #include <AK/JsonValue.h>
 #include <AK/StringView.h>
+#include <AK/Vector.h>
 #include <LibGfx/Point.h>
+#include <LibWebView/Attribute.h>
 #include <LibWebView/ViewImplementation.h>
 
 #pragma once
@@ -67,6 +70,7 @@ private:
     Optional<i32> m_body_node_id;
     Optional<i32> m_pending_selection;
 
+    bool m_inspector_loaded { false };
     bool m_dom_tree_loaded { false };
 
     struct ContextMenuData {
@@ -75,6 +79,8 @@ private:
         Optional<Attribute> attribute;
     };
     Optional<ContextMenuData> m_context_menu_data;
+
+    HashMap<int, Vector<Attribute>> m_dom_node_attributes;
 
     i32 m_highest_notified_message_index { -1 };
     i32 m_highest_received_message_index { -1 };

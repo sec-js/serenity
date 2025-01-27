@@ -16,17 +16,16 @@ class CFEventLoopManager final : public Core::EventLoopManager {
 public:
     virtual NonnullOwnPtr<Core::EventLoopImplementation> make_implementation() override;
 
-    virtual int register_timer(Core::EventReceiver&, int interval_milliseconds, bool should_reload, Core::TimerShouldFireWhenNotVisible) override;
-    virtual bool unregister_timer(int timer_id) override;
+    virtual intptr_t register_timer(Core::EventReceiver&, int interval_milliseconds, bool should_reload, Core::TimerShouldFireWhenNotVisible) override;
+    virtual void unregister_timer(intptr_t timer_id) override;
 
     virtual void register_notifier(Core::Notifier&) override;
     virtual void unregister_notifier(Core::Notifier&) override;
 
     virtual void did_post_event() override;
 
-    // FIXME: These APIs only exist for obscure use-cases inside SerenityOS. Try to get rid of them.
-    virtual int register_signal(int, Function<void(int)>) override { return 0; }
-    virtual void unregister_signal(int) override { }
+    virtual int register_signal(int, Function<void(int)>) override;
+    virtual void unregister_signal(int) override;
 };
 
 class CFEventLoopImplementation final : public Core::EventLoopImplementation {

@@ -11,6 +11,7 @@
 #include <AK/Function.h>
 #include <AK/HashTable.h>
 #include <AK/IntrusiveList.h>
+#include <Kernel/FileSystem/CustodyBase.h>
 #include <Kernel/FileSystem/FIFO.h>
 #include <Kernel/FileSystem/FileSystem.h>
 #include <Kernel/FileSystem/InodeIdentifier.h>
@@ -30,7 +31,6 @@ enum class ShouldBlock {
 
 class Inode : public ListedRefCounted<Inode, LockType::Spinlock>
     , public LockWeakable<Inode> {
-    friend class VirtualFileSystem;
     friend class FileSystem;
     friend class InodeFile;
 
@@ -56,6 +56,7 @@ public:
     ErrorOr<size_t> write_bytes(off_t, size_t, UserOrKernelBuffer const& data, OpenFileDescription*);
     ErrorOr<size_t> read_bytes(off_t, size_t, UserOrKernelBuffer& buffer, OpenFileDescription*) const;
     ErrorOr<size_t> read_until_filled_or_end(off_t, size_t, UserOrKernelBuffer buffer, OpenFileDescription*) const;
+    ErrorOr<void> truncate(u64);
 
     virtual ErrorOr<void> attach(OpenFileDescription&) { return {}; }
     virtual void detach(OpenFileDescription&) { }
@@ -65,14 +66,10 @@ public:
     virtual ErrorOr<NonnullRefPtr<Inode>> create_child(StringView name, mode_t, dev_t, UserID, GroupID) = 0;
     virtual ErrorOr<void> add_child(Inode&, StringView name, mode_t) = 0;
     virtual ErrorOr<void> remove_child(StringView name) = 0;
-    /// Replace child atomically, incrementing the link count of the replacement
-    /// inode and decrementing the older inode's.
-    virtual ErrorOr<void> replace_child(StringView name, Inode&) = 0;
     virtual ErrorOr<void> chmod(mode_t) = 0;
     virtual ErrorOr<void> chown(UserID, GroupID) = 0;
-    virtual ErrorOr<void> truncate(u64) { return {}; }
 
-    ErrorOr<NonnullRefPtr<Custody>> resolve_as_link(Credentials const&, Custody& base, RefPtr<Custody>* out_parent, int options, int symlink_recursion_level) const;
+    ErrorOr<NonnullRefPtr<Custody>> resolve_as_link(VFSRootContext const&, Credentials const&, CustodyBase const& base, RefPtr<Custody>* out_parent, int options, int symlink_recursion_level) const;
 
     virtual ErrorOr<int> get_block_address(int) { return ENOTSUP; }
 
@@ -121,8 +118,11 @@ protected:
 
     mutable Mutex m_inode_lock { "Inode"sv };
 
+    ErrorOr<size_t> prepare_and_write_bytes_locked(off_t, size_t, UserOrKernelBuffer const& data, OpenFileDescription*);
+
     virtual ErrorOr<size_t> write_bytes_locked(off_t, size_t, UserOrKernelBuffer const& data, OpenFileDescription*) = 0;
     virtual ErrorOr<size_t> read_bytes_locked(off_t, size_t, UserOrKernelBuffer& buffer, OpenFileDescription*) const = 0;
+    virtual ErrorOr<void> truncate_locked(u64) { return {}; }
 
 private:
     ErrorOr<bool> try_apply_flock(Process const&, OpenFileDescription const&, flock const&);

@@ -35,34 +35,31 @@ float lerp_1d(ReadonlySpan<T> values, float x)
 // Does multi-dimensional linear interpolation over a lookup table.
 // `size(i)` should returns the number of samples in the i'th dimension.
 // `sample()` gets a vector where 0 <= i'th coordinate < size(i) and should return the value of the look-up table at that position.
-inline FloatVector3 lerp_nd(Function<unsigned(size_t)> size, Function<FloatVector3(Vector<unsigned> const&)> sample, Vector<float> const& x)
+inline FloatVector3 lerp_nd(Function<unsigned(size_t)> size, Function<FloatVector3(ReadonlySpan<unsigned> const&)> sample, ReadonlySpan<float> x)
 {
-    Vector<unsigned, 4> left_index;
-    Vector<float, 4> factor;
+    unsigned left_index[x.size()];
+    float factor[x.size()];
     for (size_t i = 0; i < x.size(); ++i) {
         unsigned n = size(i) - 1;
         float ec = x[i] * n;
-        left_index.append(min(static_cast<unsigned>(ec), n - 1));
-        factor.append(ec - left_index[i]);
+        left_index[i] = min(static_cast<unsigned>(ec), n - 1);
+        factor[i] = ec - left_index[i];
     }
 
-    Vector<FloatVector3> samples;
-    samples.resize(1u << x.size());
+    FloatVector3 sample_output {};
     // The i'th bit of mask indicates if the i'th coordinate is rounded up or down.
-    Vector<unsigned> coordinates;
-    coordinates.resize(x.size());
+    unsigned coordinates[x.size()];
+    ReadonlySpan<unsigned> coordinates_span { coordinates, x.size() };
     for (size_t mask = 0; mask < (1u << x.size()); ++mask) {
-        for (size_t i = 0; i < x.size(); ++i)
+        float sample_weight = 1.0f;
+        for (size_t i = 0; i < x.size(); ++i) {
             coordinates[i] = left_index[i] + ((mask >> i) & 1u);
-        samples[mask] = sample(coordinates);
+            sample_weight *= ((mask >> i) & 1u) ? factor[i] : 1.0f - factor[i];
+        }
+        sample_output += sample(coordinates_span) * sample_weight;
     }
 
-    for (int i = static_cast<int>(x.size() - 1); i >= 0; --i) {
-        for (size_t mask = 0; mask < (1u << i); ++mask)
-            samples[mask] = mix(samples[mask], samples[mask | (1u << i)], factor[i]);
-    }
-
-    return samples[0];
+    return sample_output;
 }
 
 using S15Fixed16 = FixedPoint<16, i32>;
@@ -1080,7 +1077,7 @@ inline ErrorOr<FloatVector3> Lut16TagData::evaluate(ColorSpace input_space, Colo
     //  The first sequential byte of the entry contains the function value for the first output function,
     //  the second sequential byte of the entry contains the function value for the second output function,
     //  and so on until all the output functions have been supplied."
-    auto sample = [this](Vector<unsigned> const& coordinates) {
+    auto sample = [this](ReadonlySpan<unsigned> const& coordinates) {
         size_t stride = 3;
         size_t offset = 0;
         for (int i = coordinates.size() - 1; i >= 0; --i) {
@@ -1096,7 +1093,7 @@ inline ErrorOr<FloatVector3> Lut16TagData::evaluate(ColorSpace input_space, Colo
     //  Each output table entry is appropriately normalized to the range 0 to 65535.
     //  The outputTable is of size (OutputChannels x outputTableEntries x 2) bytes.
     //  When stored in this tag, the one-dimensional lookup tables are packed one after another"
-    for (u8 c = 0; c < output_color.length(); ++c)
+    for (u8 c = 0; c < 3; ++c)
         output_color[c] = lerp_1d(m_output_tables.span().slice(c * m_number_of_output_table_entries, m_number_of_output_table_entries), output_color[c]) / 65535.0f;
 
     if (connection_space == ColorSpace::PCSXYZ) {
@@ -1168,7 +1165,7 @@ inline ErrorOr<FloatVector3> Lut8TagData::evaluate(ColorSpace input_space, Color
     //  The first sequential byte of the entry contains the function value for the first output function,
     //  the second sequential byte of the entry contains the function value for the second output function,
     //  and so on until all the output functions have been supplied."
-    auto sample = [this](Vector<unsigned> const& coordinates) {
+    auto sample = [this](ReadonlySpan<unsigned> const& coordinates) {
         size_t stride = 3;
         size_t offset = 0;
         for (int i = coordinates.size() - 1; i >= 0; --i) {
@@ -1184,7 +1181,7 @@ inline ErrorOr<FloatVector3> Lut8TagData::evaluate(ColorSpace input_space, Color
     //  Each output table entry is appropriately normalized to the range 0 to 255.
     //  The outputTable is of size (OutputChannels x 256) bytes.
     //  When stored in this tag, the one-dimensional lookup tables are packed one after another"
-    for (u8 c = 0; c < output_color.length(); ++c)
+    for (u8 c = 0; c < 3; ++c)
         output_color[c] = lerp_1d(m_output_tables.span().slice(c * 256, 256), output_color[c]) / 255.0f;
 
     if (connection_space == ColorSpace::PCSXYZ) {
@@ -1241,7 +1238,7 @@ inline ErrorOr<FloatVector3> LutAToBTagData::evaluate(ColorSpace connection_spac
             in_color.append(evaluate_curve(a_curves[c], color_u8[c] / 255.0f));
 
         auto const& clut = m_clut.value();
-        auto sample1 = [&clut]<typename T>(Vector<T> const& data, Vector<unsigned> const& coordinates) {
+        auto sample1 = [&clut]<typename T>(Vector<T> const& data, ReadonlySpan<unsigned> const& coordinates) {
             size_t stride = 3;
             size_t offset = 0;
             for (int i = coordinates.size() - 1; i >= 0; --i) {
@@ -1250,7 +1247,7 @@ inline ErrorOr<FloatVector3> LutAToBTagData::evaluate(ColorSpace connection_spac
             }
             return FloatVector3 { (float)data[offset], (float)data[offset + 1], (float)data[offset + 2] };
         };
-        auto sample = [&clut, &sample1](Vector<unsigned> const& coordinates) {
+        auto sample = [&clut, &sample1](ReadonlySpan<unsigned> const& coordinates) {
             return clut.values.visit(
                 [&](Vector<u8> const& v) { return sample1(v, coordinates) / 255.0f; },
                 [&](Vector<u16> const& v) { return sample1(v, coordinates) / 65535.0f; });

@@ -9,16 +9,16 @@
 
 #pragma once
 
+#include <LibWeb/CSS/CSSStyleValue.h>
 #include <LibWeb/CSS/Enums.h>
 #include <LibWeb/CSS/PercentageOr.h>
 #include <LibWeb/CSS/Serialize.h>
-#include <LibWeb/CSS/StyleValue.h>
 
 namespace Web::CSS {
 
-class AbstractImageStyleValue : public StyleValue {
+class AbstractImageStyleValue : public CSSStyleValue {
 public:
-    using StyleValue::StyleValue;
+    using CSSStyleValue::CSSStyleValue;
 
     virtual Optional<CSSPixels> natural_width() const { return {}; }
     virtual Optional<CSSPixels> natural_height() const { return {}; }
@@ -36,7 +36,7 @@ public:
     virtual void resolve_for_size(Layout::NodeWithStyleAndBoxModelMetrics const&, CSSPixelSize) const {};
 
     virtual bool is_paintable() const = 0;
-    virtual void paint(PaintContext& context, DevicePixelRect const& dest_rect, ImageRendering) const = 0;
+    virtual void paint(PaintContext& context, DevicePixelRect const& dest_rect, ImageRendering, Vector<Gfx::Path> const& clip_paths = {}) const = 0;
 
     virtual Optional<Gfx::Color> color_if_single_pixel_bitmap() const { return {}; }
 };
@@ -58,7 +58,7 @@ struct ColorStopListElement {
 
     Optional<ColorHint> transition_hint;
     struct ColorStop {
-        RefPtr<StyleValue> color;
+        RefPtr<CSSStyleValue> color;
         Optional<TPosition> position;
         Optional<TPosition> second_position = {};
         inline bool operator==(ColorStop const&) const = default;

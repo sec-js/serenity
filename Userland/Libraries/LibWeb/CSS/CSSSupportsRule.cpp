@@ -27,18 +27,12 @@ CSSSupportsRule::CSSSupportsRule(JS::Realm& realm, NonnullRefPtr<Supports>&& sup
 void CSSSupportsRule::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::CSSSupportsRulePrototype>(realm, "CSSSupportsRule"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(CSSSupportsRule);
 }
 
 String CSSSupportsRule::condition_text() const
 {
     return m_supports->to_string();
-}
-
-void CSSSupportsRule::set_condition_text(String const& text)
-{
-    if (auto new_supports = parse_css_supports(Parser::ParsingContext { realm() }, text))
-        m_supports = new_supports.release_nonnull();
 }
 
 // https://www.w3.org/TR/cssom-1/#serialize-a-css-rule

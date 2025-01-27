@@ -5,6 +5,7 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/SVGDefsElementPrototype.h>
 #include <LibWeb/Layout/SVGBox.h>
 #include <LibWeb/SVG/SVGDefsElement.h>
 
@@ -24,13 +25,7 @@ SVGDefsElement::~SVGDefsElement()
 void SVGDefsElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::SVGDefsElementPrototype>(realm, "SVGDefsElement"_fly_string));
-}
-
-JS::GCPtr<Layout::Node> SVGDefsElement::create_layout_node(NonnullRefPtr<CSS::StyleProperties> style)
-{
-    // FIXME: We need this layout node so any <mask>s inside this element get layout computed.
-    return heap().allocate_without_realm<Layout::SVGBox>(document(), *this, move(style));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(SVGDefsElement);
 }
 
 }

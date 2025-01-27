@@ -6,7 +6,9 @@ source_set("WebIDL") {
     "Buffers.cpp",
     "CallbackType.cpp",
     "DOMException.cpp",
+    "ObservableArray.cpp",
     "OverloadResolution.cpp",
     "Promise.cpp",
+    "Tracing.cpp",
   ]
 }

@@ -14,13 +14,14 @@
 #include <AK/NumericLimits.h>
 #include <AK/String.h>
 #include <AK/Time.h>
-#include <AK/URL.h>
 #include <LibCore/AnonymousBuffer.h>
 #include <LibCore/DateTime.h>
 #include <LibCore/Proxy.h>
 #include <LibCore/System.h>
 #include <LibIPC/Encoder.h>
 #include <LibIPC/File.h>
+#include <LibURL/Origin.h>
+#include <LibURL/URL.h>
 
 namespace IPC {
 
@@ -97,18 +98,38 @@ ErrorOr<void> encode(Encoder& encoder, UnixDateTime const& value)
 }
 
 template<>
-ErrorOr<void> encode(Encoder& encoder, URL const& value)
+ErrorOr<void> encode(Encoder& encoder, URL::URL const& value)
 {
-    return encoder.encode(value.to_byte_string());
+    TRY(encoder.encode(value.serialize()));
+
+    if (!value.blob_url_entry().has_value())
+        return encoder.encode(false);
+
+    TRY(encoder.encode(true));
+
+    auto const& blob = value.blob_url_entry().value();
+
+    TRY(encoder.encode(blob.type));
+    TRY(encoder.encode(blob.byte_buffer));
+    TRY(encoder.encode(blob.environment_origin));
+
+    return {};
+}
+
+template<>
+ErrorOr<void> encode(Encoder& encoder, URL::Origin const& origin)
+{
+    TRY(encoder.encode<ByteString>(origin.scheme()));
+    TRY(encoder.encode(origin.host()));
+    TRY(encoder.encode(origin.port()));
+
+    return {};
 }
 
 template<>
 ErrorOr<void> encode(Encoder& encoder, File const& file)
 {
-    int fd = file.fd();
-
-    if (fd != -1)
-        fd = TRY(Core::System::dup(fd));
+    int fd = file.take_fd();
 
     TRY(encoder.append_file_descriptor(fd));
     return {};
@@ -127,7 +148,7 @@ ErrorOr<void> encode(Encoder& encoder, Core::AnonymousBuffer const& buffer)
 
     if (buffer.is_valid()) {
         TRY(encoder.encode_size(buffer.size()));
-        TRY(encoder.encode(IPC::File { buffer.fd() }));
+        TRY(encoder.encode(TRY(IPC::File::clone_fd(buffer.fd()))));
     }
 
     return {};

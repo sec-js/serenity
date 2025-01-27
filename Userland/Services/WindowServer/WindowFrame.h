@@ -7,6 +7,8 @@
 #pragma once
 
 #include <AK/Forward.h>
+#include <AK/HashMap.h>
+#include <AK/NonnullOwnPtr.h>
 #include <AK/RefPtr.h>
 #include <LibCore/Forward.h>
 #include <LibGfx/Forward.h>
@@ -101,10 +103,9 @@ public:
 
     void set_dirty(bool re_render_shadow = false)
     {
-        for (auto& it : m_rendered_cache) {
-            auto& cached = *it.value;
-            cached.m_dirty = true;
-            cached.m_shadow_dirty |= re_render_shadow;
+        for (auto& [_, cached] : m_rendered_cache) {
+            cached->m_dirty = true;
+            cached->m_shadow_dirty |= re_render_shadow;
         }
     }
 
@@ -113,6 +114,8 @@ public:
     Optional<HitTestResult> hit_test(Gfx::IntPoint);
 
     void open_menubar_menu(Menu&);
+
+    Gfx::WindowTheme::WindowState window_state_for_theme() const;
 
 private:
     void paint_notification_frame(Gfx::Painter&);
@@ -125,7 +128,6 @@ private:
     void handle_menubar_mouse_event(MouseEvent const&);
     void handle_menu_mouse_event(Menu&, MouseEvent const&);
 
-    Gfx::WindowTheme::WindowState window_state_for_theme() const;
     ByteString computed_title() const;
 
     Gfx::IntRect constrained_render_rect_to_screen(Gfx::IntRect const&) const;

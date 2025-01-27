@@ -64,6 +64,10 @@ Calendar::Calendar(Core::DateTime date_time, Mode mode)
     }
 
     update_tiles(m_selected_date.year(), m_selected_date.month());
+
+    REGISTER_ENUM_PROPERTY("mode", this->mode, this->set_mode, Calendar::Mode,
+        { Calendar::Mode::Month, "Month" },
+        { Calendar::Mode::Year, "Year" });
 }
 
 void Calendar::set_grid(bool show)
@@ -80,8 +84,16 @@ void Calendar::toggle_mode()
     set_show_year(!m_show_year);
     set_show_month_and_year(!m_show_month_year);
     update_tiles(this->view_year(), this->view_month());
-    this->resize(this->height(), this->width());
+    ResizeEvent resize_evt(relative_rect().size());
+    event(resize_evt);
     invalidate_layout();
+}
+
+void Calendar::set_mode(Mode mode)
+{
+    if (mode != m_mode) {
+        toggle_mode();
+    }
 }
 
 void Calendar::show_previous_date()

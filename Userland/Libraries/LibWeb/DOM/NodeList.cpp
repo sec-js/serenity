@@ -5,6 +5,7 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/NodeListPrototype.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/DOM/NodeList.h>
 
@@ -21,20 +22,15 @@ NodeList::~NodeList() = default;
 void NodeList::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::NodeListPrototype>(realm, "NodeList"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(NodeList);
 }
 
-WebIDL::ExceptionOr<JS::Value> NodeList::item_value(size_t index) const
+Optional<JS::Value> NodeList::item_value(size_t index) const
 {
     auto* node = item(index);
     if (!node)
-        return JS::js_undefined();
+        return {};
     return const_cast<Node*>(node);
-}
-
-bool NodeList::is_supported_property_index(u32 index) const
-{
-    return index < length();
 }
 
 }

@@ -5,6 +5,7 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/ProcessingInstructionPrototype.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/ProcessingInstruction.h>
 #include <LibWeb/Layout/TextNode.h>
@@ -22,7 +23,7 @@ ProcessingInstruction::ProcessingInstruction(Document& document, String const& d
 void ProcessingInstruction::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::ProcessingInstructionPrototype>(realm, "ProcessingInstruction"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(ProcessingInstruction);
 }
 
 }

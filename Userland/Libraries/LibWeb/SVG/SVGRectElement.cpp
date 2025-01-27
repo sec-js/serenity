@@ -5,6 +5,7 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/SVGRectElementPrototype.h>
 #include <LibWeb/SVG/AttributeNames.h>
 #include <LibWeb/SVG/AttributeParser.h>
 #include <LibWeb/SVG/SVGAnimatedLength.h>
@@ -23,39 +24,30 @@ SVGRectElement::SVGRectElement(DOM::Document& document, DOM::QualifiedName quali
 void SVGRectElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::SVGRectElementPrototype>(realm, "SVGRectElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(SVGRectElement);
 }
 
-void SVGRectElement::attribute_changed(FlyString const& name, Optional<String> const& value)
+void SVGRectElement::attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value)
 {
-    SVGGeometryElement::attribute_changed(name, value);
+    SVGGeometryElement::attribute_changed(name, old_value, value);
 
     if (name == SVG::AttributeNames::x) {
         m_x = AttributeParser::parse_coordinate(value.value_or(String {}));
-        m_path.clear();
     } else if (name == SVG::AttributeNames::y) {
         m_y = AttributeParser::parse_coordinate(value.value_or(String {}));
-        m_path.clear();
     } else if (name == SVG::AttributeNames::width) {
         m_width = AttributeParser::parse_positive_length(value.value_or(String {}));
-        m_path.clear();
     } else if (name == SVG::AttributeNames::height) {
         m_height = AttributeParser::parse_positive_length(value.value_or(String {}));
-        m_path.clear();
     } else if (name == SVG::AttributeNames::rx) {
         m_radius_x = AttributeParser::parse_length(value.value_or(String {}));
-        m_path.clear();
     } else if (name == SVG::AttributeNames::ry) {
         m_radius_y = AttributeParser::parse_length(value.value_or(String {}));
-        m_path.clear();
     }
 }
 
-Gfx::Path& SVGRectElement::get_path()
+Gfx::Path SVGRectElement::get_path(CSSPixelSize)
 {
-    if (m_path.has_value())
-        return m_path.value();
-
     float width = m_width.value_or(0);
     float height = m_height.value_or(0);
     float x = m_x.value_or(0);
@@ -63,10 +55,8 @@ Gfx::Path& SVGRectElement::get_path()
 
     Gfx::Path path;
     // If width or height is zero, rendering is disabled.
-    if (width == 0 && height == 0) {
-        m_path = move(path);
-        return m_path.value();
-    }
+    if (width == 0 || height == 0)
+        return path;
 
     auto corner_radii = calculate_used_corner_radius_values();
     float rx = corner_radii.width();
@@ -116,8 +106,11 @@ Gfx::Path& SVGRectElement::get_path()
     if (rx > 0 && ry > 0)
         path.elliptical_arc_to({ x + rx, y }, corner_radii, x_axis_rotation, large_arc_flag, sweep_flag);
 
-    m_path = move(path);
-    return m_path.value();
+    // Spec bug: the path needs to be closed independent of if rx and ry are greater than zero,
+    // https://github.com/w3c/svgwg/issues/753#issuecomment-567199686
+    path.close();
+
+    return path;
 }
 
 Gfx::FloatSize SVGRectElement::calculate_used_corner_radius_values() const

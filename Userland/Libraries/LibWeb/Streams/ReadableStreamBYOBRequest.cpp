@@ -5,7 +5,9 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibJS/Runtime/TypedArray.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/ReadableStreamBYOBRequestPrototype.h>
 #include <LibWeb/Streams/ReadableByteStreamController.h>
 #include <LibWeb/Streams/ReadableStreamBYOBRequest.h>
 #include <LibWeb/WebIDL/Buffers.h>
@@ -29,7 +31,7 @@ ReadableStreamBYOBRequest::ReadableStreamBYOBRequest(JS::Realm& realm)
 void ReadableStreamBYOBRequest::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::ReadableStreamBYOBRequestPrototype>(realm, "ReadableStreamBYOBRequest"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(ReadableStreamBYOBRequest);
 }
 
 void ReadableStreamBYOBRequest::visit_edges(Cell::Visitor& visitor)

@@ -38,7 +38,12 @@ void ErrorNode::dump_tree(StringBuilder& builder)
 void WellKnownNode::dump_tree(StringBuilder& builder)
 {
     static constexpr StringView type_to_name[] = {
-        "ZeroArgumentFunctionCall"sv,
+        "False"sv,
+        "NewTarget"sv,
+        "Null"sv,
+        "This"sv,
+        "True"sv,
+        "Undefined"sv,
     };
     dump_node(builder, "WellKnownNode {}", type_to_name[m_type]);
 }
@@ -62,7 +67,12 @@ void ControlFlowBranch::dump_tree(StringBuilder& builder)
 
 void MathematicalConstant::dump_tree(StringBuilder& builder)
 {
-    dump_node(builder, "MathematicalConstant {}", m_number);
+    String representation;
+    if (Crypto::UnsignedBigInteger { 1000 }.divided_by(m_number.denominator()).remainder == 0)
+        representation = MUST(String::from_byte_string(m_number.to_byte_string(3)));
+    else
+        representation = MUST(String::formatted("{}/{}", MUST(m_number.numerator().to_base(10)), MUST(m_number.denominator().to_base(10))));
+    dump_node(builder, "MathematicalConstant {}", representation);
 }
 
 void StringLiteral::dump_tree(StringBuilder& builder)
@@ -168,9 +178,21 @@ void Variable::dump_tree(StringBuilder& builder)
     dump_node(builder, "Var {}", name());
 }
 
+void Enumerator::dump_tree(StringBuilder& builder)
+{
+    dump_node(builder, "Enumerator {}", m_value);
+}
+
 void FunctionPointer::dump_tree(StringBuilder& builder)
 {
-    dump_node(builder, "Func \"{}\"", m_declaration->m_name);
+    dump_node(builder, "Func \"{}\"", m_declaration->name());
+}
+
+void List::dump_tree(StringBuilder& builder)
+{
+    dump_node(builder, "List");
+    for (auto const& element : m_elements)
+        element->format_tree(builder);
 }
 
 }

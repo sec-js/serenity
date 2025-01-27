@@ -46,7 +46,7 @@ public:
 
     virtual String to_string() const override;
     virtual ~LinearGradientStyleValue() override = default;
-    virtual bool equals(StyleValue const& other) const override;
+    virtual bool equals(CSSStyleValue const& other) const override;
 
     Vector<LinearColorStopListElement> const& color_stop_list() const
     {
@@ -60,7 +60,7 @@ public:
     void resolve_for_size(Layout::NodeWithStyleAndBoxModelMetrics const&, CSSPixelSize) const override;
 
     bool is_paintable() const override { return true; }
-    void paint(PaintContext& context, DevicePixelRect const& dest_rect, CSS::ImageRendering image_rendering) const override;
+    void paint(PaintContext& context, DevicePixelRect const& dest_rect, CSS::ImageRendering image_rendering, Vector<Gfx::Path> const& clip_paths = {}) const override;
 
 private:
     LinearGradientStyleValue(GradientDirection direction, Vector<LinearColorStopListElement> color_stop_list, GradientType type, GradientRepeating repeating)

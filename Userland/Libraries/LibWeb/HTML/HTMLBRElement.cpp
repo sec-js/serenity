@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLBRElementPrototype.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/HTMLBRElement.h>
 #include <LibWeb/Layout/BreakNode.h>
@@ -22,7 +23,7 @@ HTMLBRElement::~HTMLBRElement() = default;
 void HTMLBRElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLBRElementPrototype>(realm, "HTMLBRElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLBRElement);
 }
 
 JS::GCPtr<Layout::Node> HTMLBRElement::create_layout_node(NonnullRefPtr<CSS::StyleProperties> style)

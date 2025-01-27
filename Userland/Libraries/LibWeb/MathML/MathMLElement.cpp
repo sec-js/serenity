@@ -5,6 +5,7 @@
  */
 
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
+#include <LibWeb/Bindings/MathMLElementPrototype.h>
 #include <LibWeb/MathML/MathMLElement.h>
 #include <LibWeb/MathML/TagNames.h>
 
@@ -22,9 +23,14 @@ MathMLElement::MathMLElement(DOM::Document& document, DOM::QualifiedName qualifi
 void MathMLElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::MathMLElementPrototype>(realm, "MathMLElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(MathMLElement);
+}
 
-    m_dataset = HTML::DOMStringMap::create(*this);
+JS::NonnullGCPtr<HTML::DOMStringMap> MathMLElement::dataset()
+{
+    if (!m_dataset)
+        m_dataset = HTML::DOMStringMap::create(*this);
+    return *m_dataset;
 }
 
 Optional<ARIA::Role> MathMLElement::default_role() const
@@ -43,6 +49,12 @@ void MathMLElement::focus()
 void MathMLElement::blur()
 {
     dbgln("(STUBBED) MathMLElement::blur()");
+}
+
+void MathMLElement::visit_edges(JS::Cell::Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(m_dataset);
 }
 
 }

@@ -5,9 +5,9 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/SVGStopElementPrototype.h>
 #include <LibWeb/CSS/Parser/Parser.h>
-#include <LibWeb/CSS/StyleValues/IdentifierStyleValue.h>
-#include <LibWeb/Layout/BlockContainer.h>
+#include <LibWeb/CSS/StyleProperties.h>
 #include <LibWeb/SVG/AttributeNames.h>
 #include <LibWeb/SVG/AttributeParser.h>
 #include <LibWeb/SVG/SVGStopElement.h>
@@ -21,9 +21,9 @@ SVGStopElement::SVGStopElement(DOM::Document& document, DOM::QualifiedName quali
 {
 }
 
-void SVGStopElement::attribute_changed(FlyString const& name, Optional<String> const& value)
+void SVGStopElement::attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value)
 {
-    SVGElement::attribute_changed(name, value);
+    SVGElement::attribute_changed(name, old_value, value);
     if (name == SVG::AttributeNames::offset) {
         m_offset = AttributeParser::parse_number_percentage(value.value_or(String {}));
     }
@@ -62,13 +62,14 @@ float SVGStopElement::stop_opacity() const
 
 JS::NonnullGCPtr<SVGAnimatedNumber> SVGStopElement::offset() const
 {
-    TODO();
+    // FIXME: Implement this properly.
+    return SVGAnimatedNumber::create(realm(), 0, 0);
 }
 
 void SVGStopElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::SVGStopElementPrototype>(realm, "SVGStopElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(SVGStopElement);
 }
 
 }

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/AbstractRangePrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/DOM/AbstractRange.h>
 #include <LibWeb/DOM/Document.h>
@@ -24,7 +25,7 @@ AbstractRange::~AbstractRange() = default;
 void AbstractRange::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::AbstractRangePrototype>(realm, "AbstractRange"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(AbstractRange);
 }
 
 void AbstractRange::visit_edges(Cell::Visitor& visitor)

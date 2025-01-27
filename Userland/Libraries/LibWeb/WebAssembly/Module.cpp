@@ -21,25 +21,20 @@ WebIDL::ExceptionOr<JS::NonnullGCPtr<Module>> Module::construct_impl(JS::Realm& 
 {
     auto& vm = realm.vm();
 
-    auto index = TRY(Detail::parse_module(vm, bytes->raw_object()));
-    return vm.heap().allocate<Module>(realm, realm, index);
+    auto compiled_module = TRY(Detail::parse_module(vm, bytes->raw_object()));
+    return vm.heap().allocate<Module>(realm, realm, move(compiled_module));
 }
 
-Module::Module(JS::Realm& realm, size_t index)
+Module::Module(JS::Realm& realm, NonnullRefPtr<Detail::CompiledWebAssemblyModule> compiled_module)
     : Bindings::PlatformObject(realm)
-    , m_index(index)
+    , m_compiled_module(move(compiled_module))
 {
 }
 
 void Module::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::ModulePrototype>(realm, "WebAssembly.Module"_fly_string));
-}
-
-Wasm::Module const& Module::module() const
-{
-    return Detail::s_compiled_modules.at(index())->module;
+    WEB_SET_PROTOTYPE_FOR_INTERFACE_WITH_CUSTOM_NAME(Module, WebAssembly.Module);
 }
 
 }

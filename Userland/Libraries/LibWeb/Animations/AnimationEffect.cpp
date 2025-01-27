@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Matthew Olsson <mattco@serenityos.org>
+ * Copyright (c) 2023-2024, Matthew Olsson <mattco@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -7,16 +7,46 @@
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Animations/Animation.h>
 #include <LibWeb/Animations/AnimationEffect.h>
+#include <LibWeb/Animations/AnimationTimeline.h>
+#include <LibWeb/Bindings/AnimationEffectPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 
 namespace Web::Animations {
 
 JS_DEFINE_ALLOCATOR(AnimationEffect);
 
-JS::NonnullGCPtr<AnimationEffect> AnimationEffect::create(JS::Realm& realm)
+Bindings::FillMode css_fill_mode_to_bindings_fill_mode(CSS::AnimationFillMode mode)
 {
-    return realm.heap().allocate<AnimationEffect>(realm, realm);
+    switch (mode) {
+    case CSS::AnimationFillMode::Backwards:
+        return Bindings::FillMode::Backwards;
+    case CSS::AnimationFillMode::Both:
+        return Bindings::FillMode::Both;
+    case CSS::AnimationFillMode::Forwards:
+        return Bindings::FillMode::Forwards;
+    case CSS::AnimationFillMode::None:
+        return Bindings::FillMode::None;
+    default:
+        VERIFY_NOT_REACHED();
+    }
+}
+
+Bindings::PlaybackDirection css_animation_direction_to_bindings_playback_direction(CSS::AnimationDirection direction)
+{
+    switch (direction) {
+    case CSS::AnimationDirection::Alternate:
+        return Bindings::PlaybackDirection::Alternate;
+    case CSS::AnimationDirection::AlternateReverse:
+        return Bindings::PlaybackDirection::AlternateReverse;
+    case CSS::AnimationDirection::Normal:
+        return Bindings::PlaybackDirection::Normal;
+    case CSS::AnimationDirection::Reverse:
+        return Bindings::PlaybackDirection::Reverse;
+    default:
+        VERIFY_NOT_REACHED();
+    }
 }
 
 OptionalEffectTiming EffectTiming::to_optional_effect_timing() const
@@ -45,7 +75,7 @@ EffectTiming AnimationEffect::get_timing() const
         .iterations = m_iteration_count,
         .duration = m_iteration_duration,
         .direction = m_playback_direction,
-        .easing = m_easing_function,
+        .easing = m_timing_function.to_string(),
     };
 }
 
@@ -80,15 +110,14 @@ ComputedEffectTiming AnimationEffect::get_computed_timing() const
             .iterations = m_iteration_count,
             .duration = duration,
             .direction = m_playback_direction,
-            .easing = m_easing_function,
+            .easing = m_timing_function.to_string(),
         },
 
-        // FIXME:
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
+        end_time(),
+        active_duration(),
+        local_time(),
+        transformed_progress(),
+        current_iteration(),
     };
 }
 
@@ -110,12 +139,27 @@ WebIDL::ExceptionOr<void> AnimationEffect::update_timing(OptionalEffectTiming ti
     //    abort this procedure.
     // Note: "auto", the only valid string value, is treated as 0.
     auto& duration = timing.duration;
-    if (duration.has_value() && duration->has<double>() && (duration->get<double>() < 0.0 || isnan(duration->get<double>())))
+    auto has_valid_duration_value = [&] {
+        if (!duration.has_value())
+            return true;
+        if (duration->has<double>() && (duration->get<double>() < 0.0 || isnan(duration->get<double>())))
+            return false;
+        if (duration->has<String>() && (duration->get<String>() != "auto"))
+            return false;
+        return true;
+    }();
+    if (!has_valid_duration_value)
         return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "Invalid duration value"sv };
 
-    // FIXME:
     // 4. If the easing member of input exists but cannot be parsed using the <easing-function> production
     //    [CSS-EASING-1], throw a TypeError and abort this procedure.
+    RefPtr<CSS::CSSStyleValue const> easing_value;
+    if (timing.easing.has_value()) {
+        easing_value = parse_easing_string(realm(), timing.easing.value());
+        if (!easing_value)
+            return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "Invalid easing function"sv };
+        VERIFY(easing_value->is_easing());
+    }
 
     // 5. Assign each member that exists in input to the corresponding timing property of effect as follows:
 
@@ -148,10 +192,18 @@ WebIDL::ExceptionOr<void> AnimationEffect::update_timing(OptionalEffectTiming ti
         m_playback_direction = timing.direction.value();
 
     //    - easing → timing function
-    if (timing.easing.has_value())
-        m_easing_function = timing.easing.value();
+    if (easing_value)
+        m_timing_function = easing_value->as_easing().function();
+
+    if (auto animation = m_associated_animation)
+        animation->effect_timing_changed({});
 
     return {};
+}
+
+void AnimationEffect::set_associated_animation(JS::GCPtr<Animation> value)
+{
+    m_associated_animation = value;
 }
 
 // https://www.w3.org/TR/web-animations-1/#animation-direction
@@ -240,8 +292,8 @@ Optional<double> AnimationEffect::active_time_using_fill(Bindings::FillMode fill
 
         // -> If the fill mode is forwards or both,
         if (fill_mode == Bindings::FillMode::Forwards || fill_mode == Bindings::FillMode::Both) {
-            // Return the result of evaluating max(local time - start delay - active duration, 0).
-            return max(local_time().value() - m_start_delay - active_duration(), 0.0);
+            // Return the result of evaluating max(min(local time - start delay, active duration), 0).
+            return max(min(local_time().value() - m_start_delay, active_duration()), 0.0);
         }
 
         // -> Otherwise,
@@ -252,6 +304,54 @@ Optional<double> AnimationEffect::active_time_using_fill(Bindings::FillMode fill
     // -> Otherwise (the local time is unresolved),
     //    Return an unresolved time value.
     return {};
+}
+
+// https://www.w3.org/TR/web-animations-1/#in-play
+bool AnimationEffect::is_in_play() const
+{
+    // An animation effect is in play if all of the following conditions are met:
+    // - the animation effect is in the active phase, and
+    // - the animation effect is associated with an animation that is not finished.
+    return is_in_the_active_phase() && m_associated_animation && !m_associated_animation->is_finished();
+}
+
+// https://www.w3.org/TR/web-animations-1/#current
+bool AnimationEffect::is_current() const
+{
+    // An animation effect is current if any of the following conditions are true:
+
+    // - the animation effect is in play, or
+    if (is_in_play())
+        return true;
+
+    if (auto animation = m_associated_animation) {
+        auto playback_rate = animation->playback_rate();
+
+        // - the animation effect is associated with an animation with a playback rate > 0 and the animation effect is
+        //   in the before phase, or
+        if (playback_rate > 0.0 && is_in_the_before_phase())
+            return true;
+
+        // - the animation effect is associated with an animation with a playback rate < 0 and the animation effect is
+        //   in the after phase, or
+        if (playback_rate < 0.0 && is_in_the_after_phase())
+            return true;
+
+        // - the animation effect is associated with an animation not in the idle play state with a non-null associated
+        //   timeline that is not monotonically increasing.
+        if (animation->play_state() != Bindings::AnimationPlayState::Idle && animation->timeline() && !animation->timeline()->is_monotonically_increasing())
+            return true;
+    }
+
+    return false;
+}
+
+// https://www.w3.org/TR/web-animations-1/#in-effect
+bool AnimationEffect::is_in_effect() const
+{
+    // An animation effect is in effect if its active time, as calculated according to the procedure in
+    // §4.8.3.1 Calculating the active time, is not unresolved.
+    return active_time().has_value();
 }
 
 // https://www.w3.org/TR/web-animations-1/#before-active-boundary-time
@@ -324,15 +424,25 @@ AnimationEffect::Phase AnimationEffect::phase() const
 {
     // This is a convenience method that returns the phase of the animation effect, to avoid having to call all of the
     // phase functions separately.
-    // FIXME: There is a lot of duplicated condition checking here which can probably be inlined into this function
+    auto local_time = this->local_time();
+    if (!local_time.has_value())
+        return Phase::Idle;
 
-    if (is_in_the_before_phase())
+    auto before_active_boundary_time = this->before_active_boundary_time();
+    // - the local time is less than the before-active boundary time, or
+    // - the animation direction is "backwards" and the local time is equal to the before-active boundary time.
+    if (local_time.value() < before_active_boundary_time || (animation_direction() == AnimationDirection::Backwards && local_time.value() == before_active_boundary_time))
         return Phase::Before;
-    if (is_in_the_active_phase())
-        return Phase::Active;
-    if (is_in_the_after_phase())
+
+    auto after_active_boundary_time = this->after_active_boundary_time();
+    // - the local time is greater than the active-after boundary time, or
+    // - the animation direction is "forwards" and the local time is equal to the active-after boundary time.
+    if (local_time.value() > after_active_boundary_time || (animation_direction() == AnimationDirection::Forwards && local_time.value() == after_active_boundary_time))
         return Phase::After;
-    return Phase::Idle;
+
+    // - An animation effect is in the active phase if the animation effect’s local time is not unresolved and it is not
+    // - in either the before phase nor the after phase.
+    return Phase::Active;
 }
 
 // https://www.w3.org/TR/web-animations-1/#overall-progress
@@ -486,7 +596,19 @@ Optional<double> AnimationEffect::transformed_progress() const
 
     // 3. Return the result of evaluating the animation effect’s timing function passing directed progress as the input progress value and
     //    before flag as the before flag.
-    return m_timing_function(directed_progress.value(), before_flag);
+    return m_timing_function.evaluate_at(directed_progress.value(), before_flag);
+}
+
+RefPtr<CSS::CSSStyleValue const> AnimationEffect::parse_easing_string(JS::Realm& realm, StringView value)
+{
+    auto parser = CSS::Parser::Parser::create(CSS::Parser::ParsingContext(realm), value);
+
+    if (auto style_value = parser.parse_as_css_value(CSS::PropertyID::AnimationTimingFunction)) {
+        if (style_value->is_easing())
+            return style_value;
+    }
+
+    return {};
 }
 
 AnimationEffect::AnimationEffect(JS::Realm& realm)
@@ -497,7 +619,13 @@ AnimationEffect::AnimationEffect(JS::Realm& realm)
 void AnimationEffect::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::AnimationEffectPrototype>(realm, "AnimationEffect"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(AnimationEffect);
+}
+
+void AnimationEffect::visit_edges(JS::Cell::Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(m_associated_animation);
 }
 
 }

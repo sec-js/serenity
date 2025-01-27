@@ -49,8 +49,13 @@ struct GridItem {
         return box_state.margin_box_top() + content_size + box_state.margin_box_bottom();
     }
 
-    [[nodiscard]] int gap_adjusted_row(Box const& grid_box) const;
-    [[nodiscard]] int gap_adjusted_column(Box const& grid_box) const;
+    [[nodiscard]] int gap_adjusted_row() const;
+    [[nodiscard]] int gap_adjusted_column() const;
+};
+
+enum class FoundUnoccupiedPlace {
+    No,
+    Yes
 };
 
 class OccupationGrid {
@@ -60,7 +65,7 @@ public:
         m_max_column_index = max(0, columns_count - 1);
         m_max_row_index = max(0, rows_count - 1);
     }
-    OccupationGrid() {};
+    OccupationGrid() { }
 
     void set_occupied(int column_start, int column_end, int row_start, int row_end);
 
@@ -83,6 +88,8 @@ public:
 
     bool is_occupied(int column_index, int row_index) const;
 
+    FoundUnoccupiedPlace find_unoccupied_place(GridDimension dimension, int& column_index, int& row_index, int column_span, int row_span) const;
+
 private:
     HashTable<GridPosition> m_occupation_grid;
 
@@ -94,12 +101,12 @@ private:
 
 class GridFormattingContext final : public FormattingContext {
 public:
-    explicit GridFormattingContext(LayoutState&, Box const& grid_container, FormattingContext* parent);
+    explicit GridFormattingContext(LayoutState&, LayoutMode, Box const& grid_container, FormattingContext* parent);
     ~GridFormattingContext();
 
     virtual bool inhibits_floating() const override { return true; }
 
-    virtual void run(Box const&, LayoutMode, AvailableSpace const& available_space) override;
+    virtual void run(AvailableSpace const& available_space) override;
     virtual CSSPixels automatic_content_width() const override;
     virtual CSSPixels automatic_content_height() const override;
 
@@ -112,8 +119,7 @@ private:
     void resolve_items_box_metrics(GridDimension const dimension);
 
     CSSPixels m_automatic_content_height { 0 };
-    bool is_auto_positioned_row(CSS::GridTrackPlacement const&, CSS::GridTrackPlacement const&) const;
-    bool is_auto_positioned_column(CSS::GridTrackPlacement const&, CSS::GridTrackPlacement const&) const;
+
     bool is_auto_positioned_track(CSS::GridTrackPlacement const&, CSS::GridTrackPlacement const&) const;
 
     struct GridTrack {
@@ -154,8 +160,6 @@ private:
     Vector<GridLine> m_column_lines;
 
     void init_grid_lines(GridDimension);
-
-    HashMap<String, GridArea> m_grid_areas;
 
     Vector<GridTrack> m_grid_rows;
     Vector<GridTrack> m_grid_columns;
@@ -240,19 +244,29 @@ private:
     void resolve_grid_item_widths();
     void resolve_grid_item_heights();
 
+    void resolve_track_spacing(GridDimension const dimension);
+
     AvailableSize get_free_space(AvailableSpace const&, GridDimension const) const;
 
     Optional<int> get_line_index_by_line_name(GridDimension dimension, String const&);
     CSSPixels resolve_definite_track_size(CSS::GridSize const&, AvailableSpace const&);
-    int count_of_repeated_auto_fill_or_fit_tracks(GridDimension);
+    int count_of_repeated_auto_fill_or_fit_tracks(GridDimension, CSS::ExplicitGridTrack const& repeated_track);
 
     void build_grid_areas();
+
+    struct PlacementPosition {
+        int start { 0 };
+        int end { 0 };
+        size_t span { 1 };
+    };
+    PlacementPosition resolve_grid_position(Box const& child_box, GridDimension const dimension);
 
     void place_grid_items();
     void place_item_with_row_and_column_position(Box const& child_box);
     void place_item_with_row_position(Box const& child_box);
     void place_item_with_column_position(Box const& child_box, int& auto_placement_cursor_x, int& auto_placement_cursor_y);
     void place_item_with_no_declared_position(Box const& child_box, int& auto_placement_cursor_x, int& auto_placement_cursor_y);
+    void record_grid_placement(GridItem);
 
     void initialize_grid_tracks_from_definition(GridDimension);
     void initialize_grid_tracks_for_columns_and_rows();

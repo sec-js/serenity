@@ -31,10 +31,10 @@ TrackEvent::TrackEvent(JS::Realm& realm, FlyString const& event_name, TrackEvent
 void TrackEvent::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::TrackEventPrototype>(realm, "TrackEvent"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(TrackEvent);
 }
 
-Variant<Empty, JS::Handle<VideoTrack>, JS::Handle<AudioTrack>> TrackEvent::track() const
+Variant<Empty, JS::Handle<VideoTrack>, JS::Handle<AudioTrack>, JS::Handle<TextTrack>> TrackEvent::track() const
 {
     // FIXME: This is a bit awkward. When creating a nullable union, our IDL generator creates a type of
     //        Optional<Variant<...>>, using an empty Optional to represent null. But when retrieving the

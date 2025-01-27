@@ -9,8 +9,8 @@
 
 #include <AK/ByteBuffer.h>
 #include <AK/HashMap.h>
-#include <AK/URL.h>
 #include <LibCore/EventReceiver.h>
+#include <LibURL/URL.h>
 
 namespace Core {
 
@@ -33,8 +33,8 @@ public:
 
     // Convenience helpers for "text/uri-list"
     bool has_urls() const { return has_format("text/uri-list"sv); }
-    Vector<URL> urls() const;
-    ErrorOr<void> set_urls(Vector<URL> const&);
+    Vector<URL::URL> urls() const;
+    ErrorOr<void> set_urls(Vector<URL::URL> const&);
 
     HashMap<String, ByteBuffer> const& all_data() const { return m_data; }
 
@@ -61,6 +61,6 @@ struct MimeType {
     u64 offset { 0 };
 };
 
-Optional<StringView> get_description_from_mime_type(StringView);
+Optional<MimeType const&> get_mime_type_data(StringView);
 
 }

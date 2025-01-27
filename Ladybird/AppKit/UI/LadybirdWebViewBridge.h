@@ -13,18 +13,21 @@
 #include <LibGfx/Size.h>
 #include <LibGfx/StandardCursor.h>
 #include <LibWeb/CSS/PreferredColorScheme.h>
+#include <LibWeb/CSS/PreferredContrast.h>
+#include <LibWeb/CSS/PreferredMotion.h>
+#include <LibWeb/Page/InputEvent.h>
 #include <LibWebView/ViewImplementation.h>
-
-// FIXME: These should not be included outside of Serenity.
-#include <Kernel/API/KeyCode.h>
-#include <LibGUI/Event.h>
 
 namespace Ladybird {
 
 class WebViewBridge final : public WebView::ViewImplementation {
 public:
-    static ErrorOr<NonnullOwnPtr<WebViewBridge>> create(Vector<Web::DevicePixelRect> screen_rects, float device_pixel_ratio, WebContentOptions const&, Optional<StringView> webdriver_content_ipc_path, Web::CSS::PreferredColorScheme);
+    static ErrorOr<NonnullOwnPtr<WebViewBridge>> create(Vector<Web::DevicePixelRect> screen_rects, float device_pixel_ratio, WebContentOptions const&, Optional<StringView> webdriver_content_ipc_path, Web::CSS::PreferredColorScheme, Web::CSS::PreferredContrast, Web::CSS::PreferredMotion);
     virtual ~WebViewBridge() override;
+
+    virtual void initialize_client(CreateNewClient = CreateNewClient::Yes) override;
+
+    WebContentOptions const& web_content_options() const { return m_web_content_options; }
 
     float device_pixel_ratio() const { return m_device_pixel_ratio; }
     void set_device_pixel_ratio(float device_pixel_ratio);
@@ -40,15 +43,12 @@ public:
 
     void update_palette();
     void set_preferred_color_scheme(Web::CSS::PreferredColorScheme);
+    void set_preferred_contrast(Web::CSS::PreferredContrast);
+    void set_preferred_motion(Web::CSS::PreferredMotion);
 
-    void mouse_down_event(Gfx::IntPoint, Gfx::IntPoint, GUI::MouseButton, KeyModifier);
-    void mouse_up_event(Gfx::IntPoint, Gfx::IntPoint, GUI::MouseButton, KeyModifier);
-    void mouse_move_event(Gfx::IntPoint, Gfx::IntPoint, GUI::MouseButton, KeyModifier);
-    void mouse_wheel_event(Gfx::IntPoint, Gfx::IntPoint, GUI::MouseButton, KeyModifier, int, int);
-    void mouse_double_click_event(Gfx::IntPoint, Gfx::IntPoint, GUI::MouseButton, KeyModifier);
-
-    void key_down_event(KeyCode, KeyModifier, u32);
-    void key_up_event(KeyCode, KeyModifier, u32);
+    void enqueue_input_event(Web::MouseEvent);
+    void enqueue_input_event(Web::DragEvent);
+    void enqueue_input_event(Web::KeyEvent);
 
     struct Paintable {
         Gfx::Bitmap& bitmap;
@@ -56,26 +56,26 @@ public:
     };
     Optional<Paintable> paintable();
 
+    Function<NonnullRefPtr<WebView::WebContentClient>()> on_request_web_content;
     Function<void()> on_zoom_level_changed;
-    Function<void(Gfx::IntPoint)> on_scroll;
 
 private:
-    WebViewBridge(Vector<Web::DevicePixelRect> screen_rects, float device_pixel_ratio, WebContentOptions const&, Optional<StringView> webdriver_content_ipc_path, Web::CSS::PreferredColorScheme);
+    WebViewBridge(Vector<Web::DevicePixelRect> screen_rects, float device_pixel_ratio, WebContentOptions const&, Optional<StringView> webdriver_content_ipc_path, Web::CSS::PreferredColorScheme, Web::CSS::PreferredContrast, Web::CSS::PreferredMotion);
 
     virtual void update_zoom() override;
-    virtual Web::DevicePixelRect viewport_rect() const override;
+    virtual Web::DevicePixelSize viewport_size() const override;
     virtual Gfx::IntPoint to_content_position(Gfx::IntPoint widget_position) const override;
     virtual Gfx::IntPoint to_widget_position(Gfx::IntPoint content_position) const override;
 
-    virtual void create_client() override;
-
     Vector<Web::DevicePixelRect> m_screen_rects;
-    Gfx::IntRect m_viewport_rect;
+    Gfx::IntSize m_viewport_size;
 
     WebContentOptions m_web_content_options;
     Optional<StringView> m_webdriver_content_ipc_path;
 
     Web::CSS::PreferredColorScheme m_preferred_color_scheme { Web::CSS::PreferredColorScheme::Auto };
+    Web::CSS::PreferredContrast m_preferred_contrast { Web::CSS::PreferredContrast::Auto };
+    Web::CSS::PreferredMotion m_preferred_motion { Web::CSS::PreferredMotion::Auto };
 };
 
 }

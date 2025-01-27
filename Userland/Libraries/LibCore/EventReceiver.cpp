@@ -41,6 +41,8 @@ void EventReceiver::event(Core::Event& event)
 {
     switch (event.type()) {
     case Core::Event::Timer:
+        if (!m_timer_id)
+            break; // Too late, the timer was already stopped.
         return timer_event(static_cast<TimerEvent&>(event));
     case Core::Event::ChildAdded:
     case Core::Event::ChildRemoved:
@@ -129,10 +131,7 @@ void EventReceiver::stop_timer()
 {
     if (!m_timer_id)
         return;
-    bool success = Core::EventLoop::unregister_timer(m_timer_id);
-    if (!success) {
-        dbgln("{:p} could not unregister timer {}", this, m_timer_id);
-    }
+    Core::EventLoop::unregister_timer(m_timer_id);
     m_timer_id = 0;
 }
 

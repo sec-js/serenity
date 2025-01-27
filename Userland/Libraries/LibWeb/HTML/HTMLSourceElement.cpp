@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLSourceElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/HTML/AttributeNames.h>
 #include <LibWeb/HTML/HTMLMediaElement.h>
@@ -23,7 +24,7 @@ HTMLSourceElement::~HTMLSourceElement() = default;
 void HTMLSourceElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLSourceElementPrototype>(realm, "HTMLSourceElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLSourceElement);
 }
 
 // https://html.spec.whatwg.org/multipage/embedded-content.html#the-source-element:the-source-element-15

@@ -9,7 +9,7 @@
 #include <AK/Debug.h>
 #include <AK/Endian.h>
 #include <AK/String.h>
-#include <LibCompress/LZWDecoder.h>
+#include <LibCompress/Lzw.h>
 #include <LibCompress/PackBitsDecoder.h>
 #include <LibCompress/Zlib.h>
 #include <LibGfx/CMYKBitmap.h>
@@ -34,6 +34,11 @@ CCITT::Group3Options parse_t4_options(u32 bit_field)
         options.use_fill_bits = CCITT::Group3Options::UseFillBits::Yes;
 
     return options;
+}
+
+bool is_bilevel(TIFF::PhotometricInterpretation interpretation)
+{
+    return interpretation == TIFF::PhotometricInterpretation::WhiteIsZero || interpretation == TIFF::PhotometricInterpretation::BlackIsZero;
 }
 
 }
@@ -63,33 +68,90 @@ public:
         return {};
     }
 
-    ErrorOr<void> ensure_conditional_tags_are_present() const
+    ErrorOr<void> ensure_conditional_tags_are_correct() const
     {
         if (m_metadata.photometric_interpretation() == PhotometricInterpretation::RGBPalette && !m_metadata.color_map().has_value())
             return Error::from_string_literal("TIFFImageDecoderPlugin: RGBPalette image doesn't contain a color map");
 
+        if (m_metadata.tile_width() == 0u || m_metadata.tile_length() == 0u)
+            return Error::from_string_literal("TIFFImageDecoderPlugin: Null value in tile's dimensions");
+
         return {};
+    }
+
+    Optional<Vector<u32>> segment_offsets() const
+    {
+        return m_metadata.strip_offsets().has_value() ? m_metadata.strip_offsets() : m_metadata.tile_offsets();
+    }
+
+    Optional<Vector<u32>> segment_byte_counts() const
+    {
+        return m_metadata.strip_byte_counts().has_value() ? m_metadata.strip_byte_counts() : m_metadata.tile_byte_counts();
+    }
+
+    bool is_tiled() const
+    {
+        return m_metadata.tile_width().has_value() && m_metadata.tile_length().has_value();
     }
 
     ErrorOr<void> ensure_baseline_tags_are_correct() const
     {
-        if (m_metadata.strip_offsets()->size() != m_metadata.strip_byte_counts()->size())
+        if (!segment_offsets().has_value())
+            return Error::from_string_literal("TIFFImageDecoderPlugin: Missing Offsets tag");
+
+        if (!segment_byte_counts().has_value())
+            return Error::from_string_literal("TIFFImageDecoderPlugin: Missing ByteCounts tag");
+
+        if (segment_offsets()->size() != segment_byte_counts()->size())
             return Error::from_string_literal("TIFFImageDecoderPlugin: StripsOffset and StripByteCount have different sizes");
 
-        if (!m_metadata.rows_per_strip().has_value() && m_metadata.strip_byte_counts()->size() != 1)
+        if (!m_metadata.rows_per_strip().has_value() && segment_byte_counts()->size() != 1 && !is_tiled())
             return Error::from_string_literal("TIFFImageDecoderPlugin: RowsPerStrip is not provided and impossible to deduce");
 
-        if (any_of(*m_metadata.bits_per_sample(), [](auto bit_depth) { return bit_depth == 0 || bit_depth > 32; }))
-            return Error::from_string_literal("TIFFImageDecoderPlugin: Invalid value in BitsPerSample");
+        if (!is_bilevel(*m_metadata.photometric_interpretation())) {
+            if (!m_metadata.bits_per_sample().has_value())
+                return Error::from_string_literal("TIFFImageDecoderPlugin: Tag BitsPerSample is missing");
+
+            if (!m_metadata.samples_per_pixel().has_value())
+                return Error::from_string_literal("TIFFImageDecoderPlugin: Tag SamplesPerPixel is missing");
+
+            if (any_of(*m_metadata.bits_per_sample(), [](auto bit_depth) { return bit_depth == 0 || bit_depth > 32; }))
+                return Error::from_string_literal("TIFFImageDecoderPlugin: Invalid value in BitsPerSample");
+
+            if (m_metadata.bits_per_sample()->size() != m_metadata.samples_per_pixel())
+                return Error::from_string_literal("TIFFImageDecoderPlugin: Invalid number of values in BitsPerSample");
+
+            if (*m_metadata.samples_per_pixel() < samples_for_photometric_interpretation(*m_metadata.photometric_interpretation()))
+                return Error::from_string_literal("TIFFImageDecoderPlugin: Not enough values in BitsPerSample for given PhotometricInterpretation");
+        } else {
+            if (m_metadata.bits_per_sample().has_value() && any_of(*m_metadata.bits_per_sample(), [](auto bit_depth) { return bit_depth == 0 || bit_depth > 32; }))
+                return Error::from_string_literal("TIFFImageDecoderPlugin: Invalid value in BitsPerSample");
+        }
 
         return {};
+    }
+
+    void cache_values()
+    {
+        if (m_metadata.photometric_interpretation().has_value())
+            m_photometric_interpretation = m_metadata.photometric_interpretation().value();
+        if (m_metadata.bits_per_sample().has_value())
+            m_bits_per_sample = m_metadata.bits_per_sample().value();
+        else if (is_bilevel(m_photometric_interpretation))
+            m_bits_per_sample.append(1);
+        if (m_metadata.image_width().has_value())
+            m_image_width = m_metadata.image_width().value();
+        if (m_metadata.predictor().has_value())
+            m_predictor = m_metadata.predictor().value();
+        m_alpha_channel_index = alpha_channel_index();
     }
 
     ErrorOr<void> decode_frame()
     {
         TRY(ensure_baseline_tags_are_present(m_metadata));
         TRY(ensure_baseline_tags_are_correct());
-        TRY(ensure_conditional_tags_are_present());
+        TRY(ensure_conditional_tags_are_correct());
+        cache_values();
         auto maybe_error = decode_frame_impl();
 
         if (maybe_error.is_error()) {
@@ -102,7 +164,7 @@ public:
 
     IntSize size() const
     {
-        return ExifOrientedBitmap::oriented_size({ *m_metadata.image_width(), *m_metadata.image_height() }, *m_metadata.orientation());
+        return ExifOrientedBitmap::oriented_size({ *m_metadata.image_width(), *m_metadata.image_length() }, *m_metadata.orientation());
     }
 
     ExifMetadata const& metadata() const
@@ -141,9 +203,9 @@ private:
         return NumericLimits<u8>::max() * value / ((1 << bits) - 1);
     }
 
-    u8 samples_for_photometric_interpretation() const
+    static u8 samples_for_photometric_interpretation(PhotometricInterpretation photometric_interpretation)
     {
-        switch (*m_metadata.photometric_interpretation()) {
+        switch (photometric_interpretation) {
         case PhotometricInterpretation::WhiteIsZero:
         case PhotometricInterpretation::BlackIsZero:
         case PhotometricInterpretation::RGBPalette:
@@ -163,13 +225,13 @@ private:
             auto const extra_samples = m_metadata.extra_samples().value();
             for (u8 i = 0; i < extra_samples.size(); ++i) {
                 if (extra_samples[i] == ExtraSample::UnassociatedAlpha)
-                    return i + samples_for_photometric_interpretation();
+                    return i + samples_for_photometric_interpretation(m_photometric_interpretation);
             }
         }
         return OptionalNone {};
     }
 
-    ErrorOr<u8> manage_extra_channels(BigEndianInputBitStream& stream, Vector<u32> const& bits_per_sample) const
+    ErrorOr<u8> manage_extra_channels(BigEndianInputBitStream& stream) const
     {
         // Section 7: Additional Baseline TIFF Requirements
         // Some TIFF files may have more components per pixel than you think. A Baseline TIFF reader must skip over
@@ -178,16 +240,15 @@ private:
         // Both unknown and alpha channels are considered as extra channels, so let's iterate over
         // them, conserve the alpha value (if any) and discard everything else.
 
-        auto const number_base_channels = samples_for_photometric_interpretation();
-        auto const alpha_index = alpha_channel_index();
+        auto const number_base_channels = samples_for_photometric_interpretation(m_photometric_interpretation);
 
         Optional<u8> alpha {};
 
-        for (u8 i = number_base_channels; i < bits_per_sample.size(); ++i) {
-            if (alpha_index == i)
-                alpha = TRY(read_component(stream, bits_per_sample[i]));
+        for (u8 i = number_base_channels; i < m_bits_per_sample.size(); ++i) {
+            if (m_alpha_channel_index == i)
+                alpha = TRY(read_component(stream, m_bits_per_sample[i]));
             else
-                TRY(read_component(stream, bits_per_sample[i]));
+                TRY(read_component(stream, m_bits_per_sample[i]));
         }
 
         return alpha.value_or(NumericLimits<u8>::max());
@@ -195,26 +256,24 @@ private:
 
     ErrorOr<Color> read_color(BigEndianInputBitStream& stream)
     {
-        auto bits_per_sample = *m_metadata.bits_per_sample();
+        if (m_photometric_interpretation == PhotometricInterpretation::RGB) {
+            auto const first_component = TRY(read_component(stream, m_bits_per_sample[0]));
+            auto const second_component = TRY(read_component(stream, m_bits_per_sample[1]));
+            auto const third_component = TRY(read_component(stream, m_bits_per_sample[2]));
 
-        if (m_metadata.photometric_interpretation() == PhotometricInterpretation::RGB) {
-            auto const first_component = TRY(read_component(stream, bits_per_sample[0]));
-            auto const second_component = TRY(read_component(stream, bits_per_sample[1]));
-            auto const third_component = TRY(read_component(stream, bits_per_sample[2]));
-
-            auto const alpha = TRY(manage_extra_channels(stream, bits_per_sample));
+            auto const alpha = TRY(manage_extra_channels(stream));
             return Color(first_component, second_component, third_component, alpha);
         }
 
-        if (m_metadata.photometric_interpretation() == PhotometricInterpretation::RGBPalette) {
-            auto const index = TRY(stream.read_bits<u16>(bits_per_sample[0]));
-            auto const alpha = TRY(manage_extra_channels(stream, bits_per_sample));
+        if (m_photometric_interpretation == PhotometricInterpretation::RGBPalette) {
+            auto const index = TRY(stream.read_bits<u16>(m_bits_per_sample[0]));
+            auto const alpha = TRY(manage_extra_channels(stream));
 
             // SamplesPerPixel == 1 is a requirement for RGBPalette
             // From description of PhotometricInterpretation in Section 8: Baseline Field Reference Guide
             // "In a TIFF ColorMap, all the Red values come first, followed by the Green values,
             //  then the Blue values."
-            u64 const size = 1ul << (*m_metadata.bits_per_sample())[0];
+            u64 const size = 1ul << m_bits_per_sample[0];
             u64 const red_offset = 0 * size;
             u64 const green_offset = 1 * size;
             u64 const blue_offset = 2 * size;
@@ -232,14 +291,14 @@ private:
                 alpha);
         }
 
-        if (*m_metadata.photometric_interpretation() == PhotometricInterpretation::WhiteIsZero
-            || *m_metadata.photometric_interpretation() == PhotometricInterpretation::BlackIsZero) {
-            auto luminosity = TRY(read_component(stream, bits_per_sample[0]));
+        if (m_photometric_interpretation == PhotometricInterpretation::WhiteIsZero
+            || m_photometric_interpretation == PhotometricInterpretation::BlackIsZero) {
+            auto luminosity = TRY(read_component(stream, m_bits_per_sample[0]));
 
-            if (m_metadata.photometric_interpretation() == PhotometricInterpretation::WhiteIsZero)
+            if (m_photometric_interpretation == PhotometricInterpretation::WhiteIsZero)
                 luminosity = ~luminosity;
 
-            auto const alpha = TRY(manage_extra_channels(stream, bits_per_sample));
+            auto const alpha = TRY(manage_extra_channels(stream));
             return Color(luminosity, luminosity, luminosity, alpha);
         }
 
@@ -248,67 +307,81 @@ private:
 
     ErrorOr<CMYK> read_color_cmyk(BigEndianInputBitStream& stream)
     {
-        VERIFY(m_metadata.photometric_interpretation() == PhotometricInterpretation::CMYK);
-        auto bits_per_sample = *m_metadata.bits_per_sample();
+        VERIFY(m_photometric_interpretation == PhotometricInterpretation::CMYK);
 
-        auto const first_component = TRY(read_component(stream, bits_per_sample[0]));
-        auto const second_component = TRY(read_component(stream, bits_per_sample[1]));
-        auto const third_component = TRY(read_component(stream, bits_per_sample[2]));
-        auto const fourth_component = TRY(read_component(stream, bits_per_sample[3]));
+        auto const first_component = TRY(read_component(stream, m_bits_per_sample[0]));
+        auto const second_component = TRY(read_component(stream, m_bits_per_sample[1]));
+        auto const third_component = TRY(read_component(stream, m_bits_per_sample[2]));
+        auto const fourth_component = TRY(read_component(stream, m_bits_per_sample[3]));
 
         // FIXME: We probably won't encounter CMYK images with an alpha channel, but if
         //        we do: the first step to support them is not dropping the value here!
-        [[maybe_unused]] auto const alpha = TRY(manage_extra_channels(stream, bits_per_sample));
+        [[maybe_unused]] auto const alpha = TRY(manage_extra_channels(stream));
         return CMYK { first_component, second_component, third_component, fourth_component };
     }
 
-    template<CallableAs<ErrorOr<ReadonlyBytes>, u32, u32> StripDecoder>
-    ErrorOr<void> loop_over_pixels(StripDecoder&& strip_decoder)
+    template<CallableAs<ErrorOr<ReadonlyBytes>, u32, IntSize> SegmentDecoder>
+    ErrorOr<void> loop_over_pixels(SegmentDecoder&& segment_decoder)
     {
-        auto const strips_offset = *m_metadata.strip_offsets();
-        auto const strip_byte_counts = *m_metadata.strip_byte_counts();
-        auto const rows_per_strip = m_metadata.rows_per_strip().value_or(*m_metadata.image_height());
+        auto const offsets = *segment_offsets();
+        auto const byte_counts = *segment_byte_counts();
+
+        auto const segment_length = m_metadata.tile_length().value_or(m_metadata.rows_per_strip().value_or(*m_metadata.image_length()));
+        auto const segment_width = m_metadata.tile_width().value_or(m_image_width);
+        auto const segment_per_rows = m_metadata.tile_width().map([&](u32 w) { return ceil_div(m_image_width, w); }).value_or(1);
 
         Variant<ExifOrientedBitmap, ExifOrientedCMYKBitmap> oriented_bitmap = TRY(([&]() -> ErrorOr<Variant<ExifOrientedBitmap, ExifOrientedCMYKBitmap>> {
-            if (metadata().photometric_interpretation() == PhotometricInterpretation::CMYK)
-                return ExifOrientedCMYKBitmap::create(*metadata().orientation(), { *metadata().image_width(), *metadata().image_height() });
-            return ExifOrientedBitmap::create(*metadata().orientation(), { *metadata().image_width(), *metadata().image_height() }, BitmapFormat::BGRA8888);
+            if (m_image_width > NumericLimits<int>::max() || *metadata().image_length() > NumericLimits<int>::max())
+                return Error::from_string_literal("TIFFImageDecoderPlugin: Image dimensions are bigger than the int range");
+
+            if (m_photometric_interpretation == PhotometricInterpretation::CMYK)
+                return ExifOrientedCMYKBitmap::create(*metadata().orientation(), { m_image_width, *metadata().image_length() });
+            return ExifOrientedBitmap::create(*metadata().orientation(), { m_image_width, *metadata().image_length() }, BitmapFormat::BGRA8888);
         }()));
 
-        for (u32 strip_index = 0; strip_index < strips_offset.size(); ++strip_index) {
-            TRY(m_stream->seek(strips_offset[strip_index]));
+        for (u32 segment_index = 0; segment_index < offsets.size(); ++segment_index) {
+            TRY(m_stream->seek(offsets[segment_index]));
 
-            auto const rows_in_strip = strip_index < strips_offset.size() - 1 ? rows_per_strip : *m_metadata.image_height() - rows_per_strip * strip_index;
-            auto const decoded_bytes = TRY(strip_decoder(strip_byte_counts[strip_index], rows_in_strip));
-            auto decoded_strip = make<FixedMemoryStream>(decoded_bytes);
-            auto decoded_stream = make<BigEndianInputBitStream>(move(decoded_strip));
+            auto const rows_in_segment = segment_index < offsets.size() - 1 ? segment_length : *m_metadata.image_length() - segment_length * segment_index;
+            auto const decoded_bytes = TRY(segment_decoder(byte_counts[segment_index], { segment_width, rows_in_segment }));
+            auto decoded_segment = make<FixedMemoryStream>(decoded_bytes);
+            auto decoded_stream = make<BigEndianInputBitStream>(move(decoded_segment));
 
-            for (u32 row = 0; row < rows_per_strip; row++) {
-                auto const scanline = row + rows_per_strip * strip_index;
-                if (scanline >= *m_metadata.image_height())
+            for (u32 row = 0; row < segment_length; row++) {
+                auto const image_row = row + segment_length * (segment_index / segment_per_rows);
+                if (image_row >= *m_metadata.image_length())
                     break;
 
                 Optional<Color> last_color {};
 
-                for (u32 column = 0; column < *m_metadata.image_width(); ++column) {
-                    if (metadata().photometric_interpretation() == PhotometricInterpretation::CMYK) {
+                for (u32 column = 0; column < segment_width; ++column) {
+                    // If image_length % segment_length != 0, the last tile will be padded.
+                    // This variable helps us to skip these last columns. Note that we still
+                    // need to read the sample from the stream.
+                    auto const image_column = column + segment_width * (segment_index % segment_per_rows);
+
+                    if (m_photometric_interpretation == PhotometricInterpretation::CMYK) {
                         auto const cmyk = TRY(read_color_cmyk(*decoded_stream));
-                        oriented_bitmap.get<ExifOrientedCMYKBitmap>().set_pixel(column, scanline, cmyk);
+                        if (image_column >= m_image_width)
+                            continue;
+                        oriented_bitmap.get<ExifOrientedCMYKBitmap>().set_pixel(image_column, image_row, cmyk);
                     } else {
                         auto color = TRY(read_color(*decoded_stream));
 
                         // FIXME:  We should do the differencing at the byte-stream level, that would make it
                         //         compatible with both LibPDF and all color formats.
-                        if (m_metadata.predictor() == Predictor::HorizontalDifferencing && last_color.has_value()) {
+                        if (m_predictor == Predictor::HorizontalDifferencing && last_color.has_value()) {
                             color.set_red(last_color->red() + color.red());
                             color.set_green(last_color->green() + color.green());
                             color.set_blue(last_color->blue() + color.blue());
-                            if (alpha_channel_index().has_value())
+                            if (m_alpha_channel_index.has_value())
                                 color.set_alpha(last_color->alpha() + color.alpha());
                         }
 
                         last_color = color;
-                        oriented_bitmap.get<ExifOrientedBitmap>().set_pixel(column, scanline, color.value());
+                        if (image_column >= m_image_width)
+                            continue;
+                        oriented_bitmap.get<ExifOrientedBitmap>().set_pixel(image_column, image_row, color.value());
                     }
                 }
 
@@ -316,7 +389,7 @@ private:
             }
         }
 
-        if (m_metadata.photometric_interpretation() == PhotometricInterpretation::CMYK)
+        if (m_photometric_interpretation == PhotometricInterpretation::CMYK)
             m_cmyk_bitmap = oriented_bitmap.get<ExifOrientedCMYKBitmap>().bitmap();
         else
             m_bitmap = oriented_bitmap.get<ExifOrientedBitmap>().bitmap();
@@ -328,19 +401,38 @@ private:
     {
         // Section 8: Baseline Field Reference Guide
         // BitsPerSample must be 1, since this type of compression is defined only for bilevel images.
-        if (m_metadata.bits_per_sample()->size() > 1)
+        if (m_bits_per_sample.size() > 1)
             return Error::from_string_literal("TIFFImageDecoderPlugin: CCITT image with BitsPerSample greater than one");
-        if (m_metadata.photometric_interpretation() != PhotometricInterpretation::WhiteIsZero && m_metadata.photometric_interpretation() != PhotometricInterpretation::BlackIsZero)
+        if (!is_bilevel(*m_metadata.photometric_interpretation()))
             return Error::from_string_literal("TIFFImageDecoderPlugin: CCITT compression is used on a non bilevel image");
 
         return {};
+    }
+
+    ErrorOr<ByteBuffer> read_bytes_considering_fill_order(u32 bytes_to_read) const
+    {
+        auto const reverse_byte = [](u8 b) {
+            b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+            b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+            b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+            return b;
+        };
+
+        auto const bytes = TRY(m_stream->read_in_place<u8 const>(bytes_to_read));
+        auto copy = TRY(ByteBuffer::copy(bytes));
+        if (m_metadata.fill_order() == FillOrder::RightToLeft) {
+            for (auto& byte : copy.bytes())
+                byte = reverse_byte(byte);
+        }
+
+        return copy;
     }
 
     ErrorOr<void> decode_frame_impl()
     {
         switch (*m_metadata.compression()) {
         case Compression::NoCompression: {
-            auto identity = [&](u32 num_bytes, u32) {
+            auto identity = [&](u32 num_bytes, IntSize) {
                 return m_stream->read_in_place<u8 const>(num_bytes);
             };
 
@@ -351,13 +443,13 @@ private:
             TRY(ensure_tags_are_correct_for_ccitt());
 
             ByteBuffer decoded_bytes {};
-            auto decode_ccitt_rle_strip = [&](u32 num_bytes, u32 image_height) -> ErrorOr<ReadonlyBytes> {
-                auto const encoded_bytes = TRY(m_stream->read_in_place<u8 const>(num_bytes));
-                decoded_bytes = TRY(CCITT::decode_ccitt_rle(encoded_bytes, *m_metadata.image_width(), image_height));
+            auto decode_ccitt_rle_segment = [&](u32 num_bytes, IntSize segment_size) -> ErrorOr<ReadonlyBytes> {
+                auto const encoded_bytes = TRY(read_bytes_considering_fill_order(num_bytes));
+                decoded_bytes = TRY(CCITT::decode_ccitt_rle(encoded_bytes, segment_size.width(), segment_size.height()));
                 return decoded_bytes;
             };
 
-            TRY(loop_over_pixels(move(decode_ccitt_rle_strip)));
+            TRY(loop_over_pixels(move(decode_ccitt_rle_segment)));
             break;
         }
         case Compression::Group3Fax: {
@@ -365,22 +457,36 @@ private:
 
             auto const parameters = parse_t4_options(*m_metadata.t4_options());
             ByteBuffer decoded_bytes {};
-            auto decode_group3_strip = [&](u32 num_bytes, u32 strip_height) -> ErrorOr<ReadonlyBytes> {
-                auto const encoded_bytes = TRY(m_stream->read_in_place<u8 const>(num_bytes));
-                decoded_bytes = TRY(CCITT::decode_ccitt_group3(encoded_bytes, *m_metadata.image_width(), strip_height, parameters));
+            auto decode_group3_segment = [&](u32 num_bytes, IntSize segment_size) -> ErrorOr<ReadonlyBytes> {
+                auto const encoded_bytes = TRY(read_bytes_considering_fill_order(num_bytes));
+                decoded_bytes = TRY(CCITT::decode_ccitt_group3(encoded_bytes, segment_size.width(), segment_size.height(), parameters));
                 return decoded_bytes;
             };
 
-            TRY(loop_over_pixels(move(decode_group3_strip)));
+            TRY(loop_over_pixels(move(decode_group3_segment)));
+            break;
+        }
+        case Compression::Group4Fax: {
+            TRY(ensure_tags_are_correct_for_ccitt());
+
+            // FIXME: We need to parse T6 options
+            ByteBuffer decoded_bytes {};
+            auto decode_group3_segment = [&](u32 num_bytes, IntSize segment_size) -> ErrorOr<ReadonlyBytes> {
+                auto const encoded_bytes = TRY(read_bytes_considering_fill_order(num_bytes));
+                decoded_bytes = TRY(CCITT::decode_ccitt_group4(encoded_bytes, segment_size.width(), segment_size.height()));
+                return decoded_bytes;
+            };
+
+            TRY(loop_over_pixels(move(decode_group3_segment)));
             break;
         }
         case Compression::LZW: {
             ByteBuffer decoded_bytes {};
-            auto decode_lzw_strip = [&](u32 num_bytes, u32) -> ErrorOr<ReadonlyBytes> {
+            auto decode_lzw_segment = [&](u32 num_bytes, IntSize) -> ErrorOr<ReadonlyBytes> {
                 auto const encoded_bytes = TRY(m_stream->read_in_place<u8 const>(num_bytes));
 
                 if (encoded_bytes.is_empty())
-                    return Error::from_string_literal("TIFFImageDecoderPlugin: Unable to read from empty LZW strip");
+                    return Error::from_string_literal("TIFFImageDecoderPlugin: Unable to read from empty LZW segment");
 
                 // Note: AFAIK, there are two common ways to use LZW compression:
                 //          - With a LittleEndian stream and no Early-Change, this is used in the GIF format
@@ -390,14 +496,14 @@ private:
                 //       Fortunately, as the first byte of a LZW stream is a constant we can guess the endianess
                 //       and deduce the version from it. The first code is 0x100 (9-bits).
                 if (encoded_bytes[0] == 0x00)
-                    decoded_bytes = TRY(Compress::LZWDecoder<LittleEndianInputBitStream>::decode_all(encoded_bytes, 8, 0));
+                    decoded_bytes = TRY(Compress::LzwDecompressor<LittleEndianInputBitStream>::decompress_all(encoded_bytes, 8, 0));
                 else
-                    decoded_bytes = TRY(Compress::LZWDecoder<BigEndianInputBitStream>::decode_all(encoded_bytes, 8, -1));
+                    decoded_bytes = TRY(Compress::LzwDecompressor<BigEndianInputBitStream>::decompress_all(encoded_bytes, 8, -1));
 
                 return decoded_bytes;
             };
 
-            TRY(loop_over_pixels(move(decode_lzw_strip)));
+            TRY(loop_over_pixels(move(decode_lzw_segment)));
             break;
         }
         case Compression::AdobeDeflate:
@@ -405,7 +511,7 @@ private:
             // This is an extension from the Technical Notes from 2002:
             // https://web.archive.org/web/20160305055905/http://partners.adobe.com/public/developer/en/tiff/TIFFphotoshop.pdf
             ByteBuffer decoded_bytes {};
-            auto decode_zlib = [&](u32 num_bytes, u32) -> ErrorOr<ReadonlyBytes> {
+            auto decode_zlib = [&](u32 num_bytes, IntSize) -> ErrorOr<ReadonlyBytes> {
                 auto stream = make<ConstrainedStream>(MaybeOwned<Stream>(*m_stream), num_bytes);
                 auto decompressed_stream = TRY(Compress::ZlibDecompressor::create(move(stream)));
                 decoded_bytes = TRY(decompressed_stream->read_until_eof(4096));
@@ -419,13 +525,13 @@ private:
             // Section 9: PackBits Compression
             ByteBuffer decoded_bytes {};
 
-            auto decode_packbits_strip = [&](u32 num_bytes, u32) -> ErrorOr<ReadonlyBytes> {
+            auto decode_packbits_segment = [&](u32 num_bytes, IntSize) -> ErrorOr<ReadonlyBytes> {
                 auto const encoded_bytes = TRY(m_stream->read_in_place<u8 const>(num_bytes));
                 decoded_bytes = TRY(Compress::PackBits::decode_all(encoded_bytes));
                 return decoded_bytes;
             };
 
-            TRY(loop_over_pixels(move(decode_packbits_strip)));
+            TRY(loop_over_pixels(move(decode_packbits_segment)));
             break;
         }
         default:
@@ -445,15 +551,24 @@ private:
         VERIFY_NOT_REACHED();
     }
 
+    ErrorOr<void> set_next_ifd(u32 ifd_offset)
+    {
+        if (ifd_offset != 0) {
+            if (ifd_offset < TRY(m_stream->tell()))
+                return Error::from_string_literal("TIFFImageDecoderPlugin: Can not accept an IFD pointing to previous data");
+
+            m_next_ifd = Optional<u32> { ifd_offset };
+        } else {
+            m_next_ifd = OptionalNone {};
+        }
+        return {};
+    }
+
     ErrorOr<void> read_next_idf_offset()
     {
         auto const next_block_position = TRY(read_value<u32>());
+        TRY(set_next_ifd(next_block_position));
 
-        if (next_block_position != 0)
-            m_next_ifd = Optional<u32> { next_block_position };
-        else
-            m_next_ifd = OptionalNone {};
-        dbgln_if(TIFF_DEBUG, "Setting image file directory pointer to {}", m_next_ifd);
         return {};
     }
 
@@ -491,13 +606,14 @@ private:
         if (!m_next_ifd.has_value())
             return Error::from_string_literal("TIFFImageDecoderPlugin: Missing an Image File Directory");
 
+        dbgln_if(TIFF_DEBUG, "Reading image file directory at offset {}", m_next_ifd);
+
         TRY(m_stream->seek(m_next_ifd.value()));
 
         auto const number_of_field = TRY(read_value<u16>());
         auto next_tag_offset = TRY(m_stream->tell());
 
         for (u16 i = 0; i < number_of_field; ++i) {
-            TRY(m_stream->seek(next_tag_offset));
             if (auto maybe_error = read_tag(); maybe_error.is_error() && TIFF_DEBUG)
                 dbgln("Unable to decode tag {}/{}", i + 1, number_of_field);
 
@@ -505,6 +621,7 @@ private:
             // IFD Entry
             // Size of tag(u16) + type(u16) + count(u32) + value_or_offset(u32) = 12
             next_tag_offset += 12;
+            TRY(m_stream->seek(next_tag_offset));
         }
 
         TRY(read_next_idf_offset());
@@ -597,7 +714,16 @@ private:
             return read_tiff_value(type, count, offset);
         }()));
 
-        TRY(handle_tag(m_metadata, tag, type, count, move(tiff_value)));
+        auto subifd_handler = [&](u32 ifd_offset) -> ErrorOr<void> {
+            if (auto result = set_next_ifd(ifd_offset); result.is_error()) {
+                dbgln("{}", result.error());
+                return {};
+            }
+            TRY(read_next_image_file_directory());
+            return {};
+        };
+
+        TRY(handle_tag(move(subifd_handler), m_metadata, tag, type, count, move(tiff_value)));
 
         return {};
     }
@@ -611,6 +737,14 @@ private:
     Optional<u32> m_next_ifd {};
 
     ExifMetadata m_metadata {};
+
+    // These are caches for m_metadata values
+    PhotometricInterpretation m_photometric_interpretation {};
+    Vector<u32, 4> m_bits_per_sample {};
+    u32 m_image_width {};
+    Predictor m_predictor {};
+
+    Optional<u8> m_alpha_channel_index {};
 };
 
 }
@@ -619,6 +753,8 @@ TIFFImageDecoderPlugin::TIFFImageDecoderPlugin(NonnullOwnPtr<FixedMemoryStream> 
 {
     m_context = make<TIFF::TIFFLoadingContext>(move(stream));
 }
+
+TIFFImageDecoderPlugin::~TIFFImageDecoderPlugin() = default;
 
 bool TIFFImageDecoderPlugin::sniff(ReadonlyBytes bytes)
 {

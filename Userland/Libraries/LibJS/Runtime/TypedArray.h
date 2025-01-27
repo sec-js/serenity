@@ -51,29 +51,31 @@ public:
 
     [[nodiscard]] Kind kind() const { return m_kind; }
 
-    virtual size_t element_size() const = 0;
+    u32 element_size() const { return m_element_size; }
     virtual DeprecatedFlyString const& element_name() const = 0;
 
-    // 25.1.3.10 IsUnclampedIntegerElementType ( type ), https://tc39.es/ecma262/#sec-isunclampedintegerelementtype
+    // 25.1.3.11 IsUnclampedIntegerElementType ( type ), https://tc39.es/ecma262/#sec-isunclampedintegerelementtype
     virtual bool is_unclamped_integer_element_type() const = 0;
-    // 25.1.3.11 IsBigIntElementType ( type ), https://tc39.es/ecma262/#sec-isbigintelementtype
+    // 25.1.3.12 IsBigIntElementType ( type ), https://tc39.es/ecma262/#sec-isbigintelementtype
     virtual bool is_bigint_element_type() const = 0;
-    // 25.1.3.15 GetValueFromBuffer ( arrayBuffer, byteIndex, type, isTypedArray, order [ , isLittleEndian ] ), https://tc39.es/ecma262/#sec-getvaluefrombuffer
+    // 25.1.3.16 GetValueFromBuffer ( arrayBuffer, byteIndex, type, isTypedArray, order [ , isLittleEndian ] ), https://tc39.es/ecma262/#sec-getvaluefrombuffer
     virtual Value get_value_from_buffer(size_t byte_index, ArrayBuffer::Order, bool is_little_endian = true) const = 0;
-    // 25.1.3.17 SetValueInBuffer ( arrayBuffer, byteIndex, type, value, isTypedArray, order [ , isLittleEndian ] ), https://tc39.es/ecma262/#sec-setvalueinbuffer
+    // 25.1.3.18 SetValueInBuffer ( arrayBuffer, byteIndex, type, value, isTypedArray, order [ , isLittleEndian ] ), https://tc39.es/ecma262/#sec-setvalueinbuffer
     virtual void set_value_in_buffer(size_t byte_index, Value, ArrayBuffer::Order, bool is_little_endian = true) = 0;
-    // 25.1.3.18 GetModifySetValueInBuffer ( arrayBuffer, byteIndex, type, value, op ), https://tc39.es/ecma262/#sec-getmodifysetvalueinbuffer
+    // 25.1.3.19 GetModifySetValueInBuffer ( arrayBuffer, byteIndex, type, value, op ), https://tc39.es/ecma262/#sec-getmodifysetvalueinbuffer
     virtual Value get_modify_set_value_in_buffer(size_t byte_index, Value value, ReadWriteModifyFunction operation, bool is_little_endian = true) = 0;
 
 protected:
-    TypedArrayBase(Object& prototype, IntrinsicConstructor intrinsic_constructor, Kind kind)
+    TypedArrayBase(Object& prototype, IntrinsicConstructor intrinsic_constructor, Kind kind, u32 element_size)
         : Object(ConstructWithPrototypeTag::Tag, prototype, MayInterfereWithIndexedPropertyAccess::Yes)
+        , m_element_size(element_size)
         , m_kind(kind)
         , m_intrinsic_constructor(intrinsic_constructor)
     {
         set_is_typed_array();
     }
 
+    u32 m_element_size { 0 };
     ByteLength m_array_length { 0 };
     ByteLength m_byte_length { 0 };
     u32 m_byte_offset { 0 };
@@ -96,7 +98,34 @@ TypedArrayWithBufferWitness make_typed_array_with_buffer_witness_record(TypedArr
 u32 typed_array_byte_length(TypedArrayWithBufferWitness const&);
 u32 typed_array_length(TypedArrayWithBufferWitness const&);
 bool is_typed_array_out_of_bounds(TypedArrayWithBufferWitness const&);
-bool is_valid_integer_index(TypedArrayBase const&, CanonicalIndex);
+bool is_valid_integer_index_slow_case(TypedArrayBase const&, CanonicalIndex property_index);
+
+// 10.4.5.14 IsValidIntegerIndex ( O, index ), https://tc39.es/ecma262/#sec-isvalidintegerindex
+inline bool is_valid_integer_index(TypedArrayBase const& typed_array, CanonicalIndex property_index)
+{
+    // 1. If IsDetachedBuffer(O.[[ViewedArrayBuffer]]) is true, return false.
+    if (typed_array.viewed_array_buffer()->is_detached())
+        return false;
+
+    // 2. If IsIntegralNumber(index) is false, return false.
+    // 3. If index is -0𝔽, return false.
+    if (!property_index.is_index())
+        return false;
+
+    // OPTIMIZATION: For TypedArrays with non-resizable ArrayBuffers, we can avoid most of the work performed by
+    //               IsValidIntegerIndex. We just need to check whether the array itself is out-of-bounds and if
+    //               the provided index is within the array bounds.
+    if (auto const& array_length = typed_array.array_length(); !array_length.is_auto()) {
+        auto byte_length = array_buffer_byte_length(*typed_array.viewed_array_buffer(), ArrayBuffer::Unordered);
+        auto byte_offset_end = typed_array.byte_offset() + array_length.length() * typed_array.element_size();
+
+        return typed_array.byte_offset() <= byte_length
+            && byte_offset_end <= byte_length
+            && property_index.as_index() < array_length.length();
+    }
+
+    return is_valid_integer_index_slow_case(typed_array, property_index);
+}
 
 // 10.4.5.15 TypedArrayGetElement ( O, index ), https://tc39.es/ecma262/#sec-typedarraygetelement
 template<typename T>
@@ -239,7 +268,7 @@ public:
     }
 
     // 10.4.5.3 [[DefineOwnProperty]] ( P, Desc ), https://tc39.es/ecma262/#sec-integer-indexed-exotic-objects-defineownproperty-p-desc
-    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor const& property_descriptor) override
+    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor const& property_descriptor, Optional<PropertyDescriptor>* precomputed_get_own_property = nullptr) override
     {
         VERIFY(property_key.is_valid());
 
@@ -284,11 +313,11 @@ public:
         }
 
         // 2. Return ! OrdinaryDefineOwnProperty(O, P, Desc).
-        return Object::internal_define_own_property(property_key, property_descriptor);
+        return Object::internal_define_own_property(property_key, property_descriptor, precomputed_get_own_property);
     }
 
     // 10.4.5.4 [[Get]] ( P, Receiver ), 10.4.5.4 [[Get]] ( P, Receiver )
-    virtual ThrowCompletionOr<Value> internal_get(PropertyKey const& property_key, Value receiver, CacheablePropertyMetadata* cacheable_metadata) const override
+    virtual ThrowCompletionOr<Value> internal_get(PropertyKey const& property_key, Value receiver, CacheablePropertyMetadata* cacheable_metadata, PropertyLookupPhase phase) const override
     {
         VERIFY(!receiver.is_empty());
 
@@ -310,7 +339,7 @@ public:
         }
 
         // 2. Return ? OrdinaryGet(O, P, Receiver).
-        return Object::internal_get(property_key, receiver, cacheable_metadata);
+        return Object::internal_get(property_key, receiver, cacheable_metadata, phase);
     }
 
     // 10.4.5.5 [[Set]] ( P, V, Receiver ), https://tc39.es/ecma262/#sec-integer-indexed-exotic-objects-set-p-v-receiver
@@ -396,7 +425,7 @@ public:
             // b. For each integer i such that 0 ≤ i < length, in ascending order, do
             for (size_t i = 0; i < length; ++i) {
                 // i. Append ! ToString(𝔽(i)) to keys.
-                keys.append(PrimitiveString::create(vm, MUST(String::number(i))));
+                keys.append(PrimitiveString::create(vm, String::number(i)));
             }
         }
 
@@ -446,8 +475,6 @@ public:
         return { reinterpret_cast<UnderlyingBufferDataType*>(m_viewed_array_buffer->buffer().data() + m_byte_offset), length };
     }
 
-    virtual size_t element_size() const override { return sizeof(UnderlyingBufferDataType); }
-
     bool is_unclamped_integer_element_type() const override
     {
         constexpr bool is_unclamped_integer = IsSame<T, i8> || IsSame<T, u8> || IsSame<T, i16> || IsSame<T, u16> || IsSame<T, i32> || IsSame<T, u32>;
@@ -466,7 +493,7 @@ public:
 
 protected:
     TypedArray(Object& prototype, IntrinsicConstructor intrinsic_constructor, u32 array_length, ArrayBuffer& array_buffer, Kind kind)
-        : TypedArrayBase(prototype, intrinsic_constructor, kind)
+        : TypedArrayBase(prototype, intrinsic_constructor, kind, sizeof(UnderlyingBufferDataType))
     {
         VERIFY(!Checked<u32>::multiplication_would_overflow(array_length, sizeof(UnderlyingBufferDataType)));
         m_viewed_array_buffer = &array_buffer;

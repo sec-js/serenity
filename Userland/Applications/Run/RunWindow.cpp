@@ -8,7 +8,6 @@
 #include "RunWindow.h"
 #include "MainWidget.h"
 #include <AK/LexicalPath.h>
-#include <AK/URL.h>
 #include <LibCore/Process.h>
 #include <LibCore/StandardPaths.h>
 #include <LibDesktop/Launcher.h>
@@ -20,11 +19,14 @@
 #include <LibGUI/ImageWidget.h>
 #include <LibGUI/MessageBox.h>
 #include <LibGUI/Widget.h>
+#include <LibURL/URL.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+namespace Run {
 
 RunWindow::RunWindow()
     : m_path_history()
@@ -41,7 +43,8 @@ RunWindow::RunWindow()
     set_resizable(false);
     set_minimizable(false);
 
-    auto main_widget = set_main_widget<Run::MainWidget>();
+    auto main_widget = MUST(Run::MainWidget::try_create());
+    set_main_widget(main_widget);
 
     m_icon_image_widget = *main_widget->find_descendant_of_type_named<GUI::ImageWidget>("icon");
     m_icon_image_widget->set_bitmap(app_icon.bitmap_for_size(32));
@@ -62,7 +65,7 @@ RunWindow::RunWindow()
         close();
     };
 
-    m_browse_button = *find_descendant_of_type_named<GUI::DialogButton>("browse_button");
+    m_browse_button = *main_widget->find_descendant_of_type_named<GUI::DialogButton>("browse_button");
     m_browse_button->on_click = [this](auto) {
         Optional<ByteString> path = GUI::FilePicker::get_open_filepath(this, {}, Core::StandardPaths::home_directory(), false, GUI::Dialog::ScreenPosition::Center);
         if (path.has_value())
@@ -93,12 +96,6 @@ void RunWindow::do_run()
     hide();
 
     if (run_via_launch(run_input) || run_as_command(run_input)) {
-        // Remove any existing history entry, prepend the successful run string to history and save.
-        m_path_history.remove_all_matching([&](ByteString v) { return v == run_input; });
-        m_path_history.prepend(run_input);
-        // FIXME: Handle failure to save history somehow.
-        (void)save_history();
-
         close();
         return;
     }
@@ -117,7 +114,11 @@ bool RunWindow::run_as_command(ByteString const& run_input)
 
     pid_t child_pid = maybe_child_pid.release_value();
 
-    // Command spawned in child shell. Hide and wait for exit code.
+    // The child shell was able to start. Let's save it to the history immediately so users can see it as the first entry the next time they run this program.
+    prepend_history(run_input);
+    // FIXME: Handle failure to save history somehow.
+    (void)save_history();
+
     int status;
     if (waitpid(child_pid, &status, 0) < 0)
         return false;
@@ -127,6 +128,8 @@ bool RunWindow::run_as_command(ByteString const& run_input)
 
     // 127 is typically the shell indicating command not found. 126 for all other errors.
     if (child_error == 126 || child_error == 127) {
+        // There's an opportunity to remove the history entry here since it failed during its runtime, but other implementations (e.g. Windows 11) don't bother removing the entry.
+        // This makes sense, especially for cases where a user is debugging a failing program.
         return false;
     }
 
@@ -140,7 +143,7 @@ bool RunWindow::run_via_launch(ByteString const& run_input)
     auto url = URL::create_with_url_or_path(run_input);
 
     if (url.scheme() == "file") {
-        auto file_path = url.serialize_path();
+        auto file_path = URL::percent_decode(url.serialize_path());
         auto real_path_or_error = FileSystem::real_path(file_path);
         if (real_path_or_error.is_error()) {
             warnln("Failed to launch '{}': {}", file_path, real_path_or_error.error());
@@ -153,6 +156,10 @@ bool RunWindow::run_via_launch(ByteString const& run_input)
         warnln("Failed to launch '{}'", url);
         return false;
     }
+
+    prepend_history(run_input);
+    // FIXME: Handle failure to save history somehow.
+    (void)save_history();
 
     dbgln("Ran via URL launch.");
 
@@ -179,13 +186,21 @@ ErrorOr<void> RunWindow::load_history()
     return {};
 }
 
+void RunWindow::prepend_history(ByteString const& input)
+{
+    m_path_history.remove_all_matching([&](ByteString const& entry) { return input == entry; });
+    m_path_history.prepend(input);
+}
+
 ErrorOr<void> RunWindow::save_history()
 {
     auto file = TRY(Core::File::open(history_file_path(), Core::File::OpenMode::Write));
 
     // Write the first 25 items of history
     for (int i = 0; i < min(static_cast<int>(m_path_history.size()), 25); i++)
-        TRY(file->write_until_depleted(ByteString::formatted("{}\n", m_path_history[i]).bytes()));
+        TRY(file->write_until_depleted(ByteString::formatted("{}\n", m_path_history[i])));
 
     return {};
+}
+
 }

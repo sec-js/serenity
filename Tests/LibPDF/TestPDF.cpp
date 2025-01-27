@@ -70,7 +70,7 @@ TEST_CASE(empty_file_issue_10702)
     EXPECT(document.is_error());
 }
 
-TEST_CASE(encodig)
+TEST_CASE(encoding)
 {
     auto file = MUST(Core::MappedFile::map("encoding.pdf"sv));
     auto document = MUST(PDF::Document::create(file->bytes()));
@@ -87,6 +87,14 @@ TEST_CASE(encodig)
     EXPECT_EQ(outline_dict->children[0]->title, (char const*)u8"Titlè 1");
     EXPECT_EQ(outline_dict->children[1]->title, (char const*)u8"Titlè 2");
     EXPECT_EQ(outline_dict->children[2]->title, (char const*)u8"Titlè 3");
+}
+
+TEST_CASE(offset)
+{
+    auto file = MUST(Core::MappedFile::map("offset.pdf"sv));
+    auto document = MUST(PDF::Document::create(file->bytes()));
+    MUST(document->initialize());
+    EXPECT_EQ(document->get_page_count(), 1U);
 }
 
 TEST_CASE(truncated_pdf_header_issue_10717)
@@ -119,6 +127,18 @@ TEST_CASE(encrypted_object_stream)
     auto info_dict = MUST(document->info_dict()).value();
     EXPECT_EQ(MUST(info_dict.author()).value(), "van der Knijff");
     EXPECT_EQ(MUST(info_dict.creator()).value(), "Acrobat PDFMaker 9.1 voor Word");
+}
+
+TEST_CASE(resolve_indirect_reference_during_parsing)
+{
+    auto file = MUST(Core::MappedFile::map("jbig2-globals.pdf"sv));
+    auto document = MUST(PDF::Document::create(file->bytes()));
+    MUST(document->initialize());
+    EXPECT_EQ(document->get_page_count(), 1U);
+
+    auto jbig2_stream_value = MUST(document->get_or_load_value(5));
+    auto jbig2_stream = MUST(document->resolve_to<PDF::StreamObject>(jbig2_stream_value));
+    EXPECT_EQ(jbig2_stream->bytes().size(), 20'000U);
 }
 
 TEST_CASE(malformed_pdf_document)

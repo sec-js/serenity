@@ -12,7 +12,6 @@
 #include <LibCore/ArgsParser.h>
 #include <LibCore/Version.h>
 #include <limits.h>
-#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -474,6 +473,23 @@ void ArgsParser::add_option(String& value, char const* help_string, char const* 
 }
 
 void ArgsParser::add_option(StringView& value, char const* help_string, char const* long_name, char short_name, char const* value_name, OptionHideMode hide_mode)
+{
+    Option option {
+        OptionArgumentMode::Required,
+        help_string,
+        long_name,
+        short_name,
+        value_name,
+        [&value](StringView s) -> ErrorOr<bool> {
+            value = s;
+            return true;
+        },
+        hide_mode,
+    };
+    add_option(move(option));
+}
+
+void ArgsParser::add_option(Optional<StringView>& value, char const* help_string, char const* long_name, char short_name, char const* value_name, OptionHideMode hide_mode)
 {
     Option option {
         OptionArgumentMode::Required,

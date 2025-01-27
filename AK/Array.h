@@ -156,10 +156,30 @@ constexpr auto integer_sequence_generate_array([[maybe_unused]] T const offset, 
 }
 
 template<typename T, T N>
-constexpr static auto iota_array(T const offset = {})
+constexpr auto iota_array(T const offset = {})
 {
     static_assert(N >= T {}, "Negative sizes not allowed in iota_array()");
     return Detail::integer_sequence_generate_array<T>(offset, MakeIntegerSequence<T, N>());
+}
+
+namespace Detail {
+template<typename T, size_t N, size_t... Is>
+constexpr auto to_array_impl(T (&&a)[N], IndexSequence<Is...>) -> Array<T, sizeof...(Is)>
+{
+    return { { a[Is]... } };
+}
+}
+
+template<typename T, size_t N>
+constexpr auto to_array(T (&&a)[N])
+{
+    return Detail::to_array_impl(move(a), MakeIndexSequence<N>());
+}
+
+template<typename T>
+constexpr auto to_array(Array<T, 0>)
+{
+    return Array<T, 0> {};
 }
 
 }
@@ -167,4 +187,5 @@ constexpr static auto iota_array(T const offset = {})
 #if USING_AK_GLOBALLY
 using AK::Array;
 using AK::iota_array;
+using AK::to_array;
 #endif

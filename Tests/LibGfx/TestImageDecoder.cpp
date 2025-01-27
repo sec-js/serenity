@@ -13,6 +13,10 @@
 #include <LibGfx/ImageFormats/ICOLoader.h>
 #include <LibGfx/ImageFormats/ILBMLoader.h>
 #include <LibGfx/ImageFormats/ImageDecoder.h>
+#include <LibGfx/ImageFormats/JBIG2Loader.h>
+#include <LibGfx/ImageFormats/JPEG2000BitplaneDecoding.h>
+#include <LibGfx/ImageFormats/JPEG2000Loader.h>
+#include <LibGfx/ImageFormats/JPEG2000ProgressionIterators.h>
 #include <LibGfx/ImageFormats/JPEGLoader.h>
 #include <LibGfx/ImageFormats/JPEGXLLoader.h>
 #include <LibGfx/ImageFormats/PAMLoader.h>
@@ -20,8 +24,10 @@
 #include <LibGfx/ImageFormats/PGMLoader.h>
 #include <LibGfx/ImageFormats/PNGLoader.h>
 #include <LibGfx/ImageFormats/PPMLoader.h>
+#include <LibGfx/ImageFormats/QMArithmeticDecoder.h>
 #include <LibGfx/ImageFormats/TGALoader.h>
 #include <LibGfx/ImageFormats/TIFFLoader.h>
+#include <LibGfx/ImageFormats/TIFFMetadata.h>
 #include <LibGfx/ImageFormats/TinyVGLoader.h>
 #include <LibGfx/ImageFormats/WebPLoader.h>
 #include <LibTest/TestCase.h>
@@ -69,6 +75,16 @@ TEST_CASE(test_bmp_top_down)
     auto plugin_decoder = TRY_OR_FAIL(Gfx::BMPImageDecoderPlugin::create(file->bytes()));
 
     TRY_OR_FAIL(expect_single_frame(*plugin_decoder));
+}
+
+TEST_CASE(test_bmp_1bpp)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("bmp/bitmap.bmp"sv)));
+    EXPECT(Gfx::BMPImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::BMPImageDecoderPlugin::create(file->bytes()));
+
+    auto frame = TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 399, 400 }));
+    EXPECT_EQ(frame.image->begin()[0], 0xff'ff'ff'ff);
 }
 
 TEST_CASE(test_ico_malformed_frame)
@@ -306,6 +322,110 @@ TEST_CASE(test_ilbm_malformed_frame)
     }
 }
 
+TEST_CASE(test_jbig2_black_47x23)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("jbig2/black_47x23.jbig2"sv)));
+    EXPECT(Gfx::JBIG2ImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::JBIG2ImageDecoderPlugin::create(file->bytes()));
+
+    auto frame = TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 47, 23 }));
+    for (auto pixel : *frame.image)
+        EXPECT_EQ(pixel, Gfx::Color(Gfx::Color::Black).value());
+}
+
+TEST_CASE(test_jbig2_white_47x23)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("jbig2/white_47x23.jbig2"sv)));
+    EXPECT(Gfx::JBIG2ImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::JBIG2ImageDecoderPlugin::create(file->bytes()));
+
+    auto frame = TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 47, 23 }));
+    for (auto pixel : *frame.image)
+        EXPECT_EQ(pixel, Gfx::Color(Gfx::Color::White).value());
+}
+
+TEST_CASE(test_jbig2_decode)
+{
+    auto bmp_file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("bmp/bitmap.bmp"sv)));
+    auto bmp_plugin_decoder = TRY_OR_FAIL(Gfx::BMPImageDecoderPlugin::create(bmp_file->bytes()));
+    auto bmp_frame = TRY_OR_FAIL(expect_single_frame_of_size(*bmp_plugin_decoder, { 399, 400 }));
+
+    Array test_inputs = {
+        TEST_INPUT("jbig2/bitmap.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-customat.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-tpgdon.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-customat-tpgdon.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-template1.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-template1-customat.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-template1-tpgdon.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-template1-customat-tpgdon.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-template2.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-template2-customat.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-template2-tpgdon.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-template2-customat-tpgdon.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-template3.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-template3-customat.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-template3-tpgdon.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-template3-customat-tpgdon.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-symbol.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-symbol-textrefine.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-symbol-textrefine-customat.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-symbol-symbolrefine.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-symbol-textbottomleft.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-symbol-textbottomlefttranspose.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-symbol-textbottomright.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-symbol-textbottomrighttranspose.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-symbol-texttopright.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-symbol-texttoprighttranspose.jbig2"sv),
+        TEST_INPUT("jbig2/bitmap-symbol-texttranspose.jbig2"sv),
+    };
+
+    for (auto test_input : test_inputs) {
+        auto file = TRY_OR_FAIL(Core::MappedFile::map(test_input));
+        EXPECT(Gfx::JBIG2ImageDecoderPlugin::sniff(file->bytes()));
+        auto plugin_decoder = TRY_OR_FAIL(Gfx::JBIG2ImageDecoderPlugin::create(file->bytes()));
+
+        auto frame = TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 399, 400 }));
+
+        for (int y = 0; y < frame.image->height(); ++y)
+            for (int x = 0; x < frame.image->width(); ++x)
+                EXPECT_EQ(frame.image->get_pixel(x, y), bmp_frame.image->get_pixel(x, y));
+    }
+}
+
+TEST_CASE(test_qm_arithmetic_decoder)
+{
+    // https://www.itu.int/rec/T-REC-T.88-201808-I
+    // H.2 Test sequence for arithmetic coder
+    // clang-format off
+    constexpr auto input = to_array<u8>({
+        0x84, 0xC7, 0x3B, 0xFC, 0xE1, 0xA1, 0x43, 0x04,
+        0x02, 0x20, 0x00, 0x00, 0x41, 0x0D, 0xBB, 0x86,
+        0xF4, 0x31, 0x7F, 0xFF, 0x88, 0xFF, 0x37, 0x47,
+        0x1A, 0xDB, 0x6A, 0xDF, 0xFF, 0xAC
+        });
+    constexpr auto output = to_array<u8>({
+        0x00, 0x02, 0x00, 0x51, 0x00, 0x00, 0x00, 0xC0,
+        0x03, 0x52, 0x87, 0x2A, 0xAA, 0xAA, 0xAA, 0xAA,
+        0x82, 0xC0, 0x20, 0x00, 0xFC, 0xD7, 0x9E, 0xF6,
+        0xBF, 0x7F, 0xED, 0x90, 0x4F, 0x46, 0xA3, 0xBF
+    });
+    // clang-format on
+
+    // "For this entire test, a single value of CX is used. I(CX) is initially 0 and MPS(CX) is initially 0."
+    Gfx::QMArithmeticDecoder::Context context { 0, 0 };
+    auto decoder = MUST(Gfx::QMArithmeticDecoder::initialize(input));
+
+    for (auto expected : output) {
+        u8 actual = 0;
+        for (size_t i = 0; i < 8; ++i) {
+            actual <<= 1;
+            actual |= static_cast<u8>(decoder.get_next_bit(context));
+        }
+        EXPECT_EQ(actual, expected);
+    }
+}
+
 TEST_CASE(test_jpeg_sof0_one_scan)
 {
     auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("jpg/rgb24.jpg"sv)));
@@ -463,6 +583,247 @@ TEST_CASE(test_jpeg_malformed_frame)
     }
 }
 
+TEST_CASE(test_jpeg2000_spec_annex_j_10_bitplane_decoding)
+{
+    // J.10.4 Arithmetic-coded compressed data
+    {
+        // Table J.22 – Arithmetic decode of first code-block
+        constexpr Array input = to_array<u8>({ 0x01, 0x8F, 0x0D, 0xC8, 0x75, 0x5D });
+
+        Vector<i16> output;
+        output.resize(5);
+        Gfx::JPEG2000::Span2D<i16> result { output.span(), { 1, 5 }, 1 };
+
+        // 16, 9, 3 are from J.10.3 Packet headers, Table J.20 – Decoding first packet header.
+        TRY_OR_FAIL(Gfx::JPEG2000::decode_code_block(result, Gfx::JPEG2000::SubBand::HorizontalLowpassVerticalLowpass, 16, input, 9, 3));
+
+        EXPECT_EQ(output[0], -26);
+        EXPECT_EQ(output[1], -22);
+        EXPECT_EQ(output[2], -30);
+        EXPECT_EQ(output[3], -32);
+        EXPECT_EQ(output[4], -19);
+    }
+
+    {
+        // Table J.23 – Arithmetic decode of second code-block
+        constexpr Array input = to_array<u8>({ 0x0F, 0xB1, 0x76 });
+
+        Vector<i16> output;
+        output.resize(4);
+        Gfx::JPEG2000::Span2D<i16> result { output.span(), { 1, 4 }, 1 };
+
+        // 7, 10, 7 are from J.10.3 Packet headers, Table J.21 – Decoding second packet header.
+        TRY_OR_FAIL(Gfx::JPEG2000::decode_code_block(result, Gfx::JPEG2000::SubBand::HorizontalLowpassVerticalHighpass, 7, input, 10, 7));
+
+        EXPECT_EQ(output[0], 1);
+        EXPECT_EQ(output[1], 5);
+        EXPECT_EQ(output[2], 1);
+        EXPECT_EQ(output[3], 0);
+    }
+}
+
+TEST_CASE(test_jpeg2000_spec_annex_j_10)
+{
+    // J.10 An example of decoding showing intermediate steps
+    // clang-format off
+    constexpr Array data = to_array<u8>({
+        0xFF, 0x4F, 0xFF, 0x51, 0x00, 0x29, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x09,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x09,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x01, 0xFF, 0x5C, 0x00,
+        0x07, 0x40, 0x40, 0x48, 0x48, 0x50, 0xFF, 0x52, 0x00, 0x0C, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x04, 0x04, 0x00, 0x01, 0xFF, 0x90, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1E, 0x00, 0x01,
+        0xFF, 0x93, 0xC7, 0xd4, 0x0C, 0x01, 0x8F, 0x0D, 0xC8, 0x75, 0x5D, 0xC0, 0x7C, 0x21, 0x80, 0x0F,
+        0xB1, 0x76, 0xFF, 0xD9,
+    });
+    // clang-format on
+
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::JPEG2000ImageDecoderPlugin::create(data));
+    EXPECT_EQ(plugin_decoder->size(), Gfx::IntSize(1, 9));
+
+    // FIXME: Do something with this.
+    // For now, this is useful for debugging:
+    // `Build/lagom/bin/TestImageDecoder test_jpeg2000_spec_annex_j_10` prints internal state with JPEG2000_DEBUG=1.
+    (void)plugin_decoder->frame(0);
+}
+
+TEST_CASE(test_jpeg2000_simple)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("jpeg2000/simple.jp2"sv)));
+    EXPECT(Gfx::JPEG2000ImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::JPEG2000ImageDecoderPlugin::create(file->bytes()));
+
+    EXPECT_EQ(plugin_decoder->size(), Gfx::IntSize(119, 101));
+
+    auto icc_bytes = MUST(plugin_decoder->icc_data());
+    EXPECT(icc_bytes.has_value());
+    EXPECT_EQ(icc_bytes->size(), 3144u);
+}
+
+TEST_CASE(test_jpeg2000_gray)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("jpeg2000/buggie-gray.jpf"sv)));
+    EXPECT(Gfx::JPEG2000ImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::JPEG2000ImageDecoderPlugin::create(file->bytes()));
+
+    EXPECT_EQ(plugin_decoder->size(), Gfx::IntSize(64, 138));
+
+    // The file contains both a simple and a real profile. Make sure we get the bigger one.
+    auto icc_bytes = MUST(plugin_decoder->icc_data());
+    EXPECT(icc_bytes.has_value());
+    EXPECT_EQ(icc_bytes->size(), 912u);
+}
+
+TEST_CASE(test_jpeg2000_progression_iterators)
+{
+    {
+        int const layer_count = 2;
+        int const max_number_of_decomposition_levels = 2;
+        int const component_count = 2;
+        auto precinct_count = [](int, int) { return 1; };
+        Gfx::JPEG2000::LayerResolutionLevelComponentPositionProgressionIterator iterator { layer_count, max_number_of_decomposition_levels, component_count, move(precinct_count) };
+
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 0, .resolution_level = 0, .component = 0, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 0, .resolution_level = 0, .component = 1, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 0, .resolution_level = 1, .component = 0, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 0, .resolution_level = 1, .component = 1, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 0, .resolution_level = 2, .component = 0, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 0, .resolution_level = 2, .component = 1, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 1, .resolution_level = 0, .component = 0, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 1, .resolution_level = 0, .component = 1, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 1, .resolution_level = 1, .component = 0, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 1, .resolution_level = 1, .component = 1, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 1, .resolution_level = 2, .component = 0, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 1, .resolution_level = 2, .component = 1, .precinct = 0 }));
+        EXPECT(!iterator.has_next());
+    }
+
+    {
+        int const layer_count = 2;
+        int const max_number_of_decomposition_levels = 2;
+        int const component_count = 2;
+        auto precinct_count = [](int, int) { return 1; };
+        Gfx::JPEG2000::ResolutionLevelLayerComponentPositionProgressionIterator iterator { layer_count, max_number_of_decomposition_levels, component_count, move(precinct_count) };
+
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 0, .resolution_level = 0, .component = 0, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 0, .resolution_level = 0, .component = 1, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 1, .resolution_level = 0, .component = 0, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 1, .resolution_level = 0, .component = 1, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 0, .resolution_level = 1, .component = 0, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 0, .resolution_level = 1, .component = 1, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 1, .resolution_level = 1, .component = 0, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 1, .resolution_level = 1, .component = 1, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 0, .resolution_level = 2, .component = 0, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 0, .resolution_level = 2, .component = 1, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 1, .resolution_level = 2, .component = 0, .precinct = 0 }));
+        EXPECT(iterator.has_next());
+        EXPECT_EQ(iterator.next(), (Gfx::JPEG2000::ProgressionData { .layer = 1, .resolution_level = 2, .component = 1, .precinct = 0 }));
+        EXPECT(!iterator.has_next());
+    }
+}
+
+TEST_CASE(test_jpeg2000_tag_tree)
+{
+    {
+        // The example from the NOTE at the end of B.10.2 Tag trees:
+        auto tree = TRY_OR_FAIL(Gfx::JPEG2000::TagTree::create(6, 3));
+        auto bits = to_array<u8>({
+            0, 1, 1, 1, 1, // q3(0, 0)
+            0, 0, 1,       // q3(1, 0)
+            1, 0, 1,       // q3(2, 0)
+        });
+        size_t index = 0;
+        Function<ErrorOr<bool>()> read_bit = [&]() -> bool {
+            return bits[index++];
+        };
+        EXPECT_EQ(1u, MUST(tree.read_value(0, 0, read_bit)));
+        EXPECT_EQ(index, 5u);
+        EXPECT_EQ(3u, MUST(tree.read_value(1, 0, read_bit)));
+        EXPECT_EQ(index, 8u);
+        EXPECT_EQ(2u, MUST(tree.read_value(2, 0, read_bit)));
+        EXPECT_EQ(index, 11u);
+    }
+
+    {
+        // The inclusion tag tree bits from Table B.5 – Example packet header bit stream.
+        auto tree = TRY_OR_FAIL(Gfx::JPEG2000::TagTree::create(3, 2));
+        auto bits = to_array<u8>({
+            1, 1, 1, // Code-block 0, 0 included for the first time (partial inclusion tag tree)
+            1,       // Code-block 1, 0 included for the first time (partial inclusion tag tree)
+            0,       // Code-block 2, 0 not yet included (partial tag tree)
+            0,       // Code-block 0, 1 not yet included
+            0,       // Code-block 1, 2 not yet included
+            // Code-block 2, 1 not yet included (no data needed, already conveyed by partial tag tree for code-block 2, 0)
+        });
+        size_t index = 0;
+        Function<ErrorOr<bool>()> read_bit = [&]() -> bool {
+            return bits[index++];
+        };
+        u32 next_layer = 1;
+        EXPECT_EQ(0u, MUST(tree.read_value(0, 0, read_bit, next_layer)));
+        EXPECT_EQ(index, 3u);
+        EXPECT_EQ(0u, MUST(tree.read_value(1, 0, read_bit, next_layer)));
+        EXPECT_EQ(index, 4u);
+        EXPECT_EQ(1u, MUST(tree.read_value(2, 0, read_bit, next_layer)));
+        EXPECT_EQ(index, 5u);
+        EXPECT_EQ(1u, MUST(tree.read_value(0, 1, read_bit, next_layer)));
+        EXPECT_EQ(index, 6u);
+        EXPECT_EQ(1u, MUST(tree.read_value(1, 1, read_bit, next_layer)));
+        EXPECT_EQ(index, 7u);
+        EXPECT_EQ(1u, MUST(tree.read_value(2, 1, read_bit, next_layer)));
+        EXPECT_EQ(index, 7u); // Didn't change!
+    }
+
+    {
+        // This isn't in the spec. If one dimension is 2^n + 1 and the other side is just 1, then the topmost node will have
+        // 2^n x 1 and 1 x 1 children. The first child will have n levels of children. The 1 x 1 child could end immediately,
+        // or it could require that it also has n levels of (all 1 x 1) children. The spec isn't clear on which of
+        // the two alternatives should happen. We currently have n levels of 1 x 1 blocks.
+        constexpr auto n = 5;
+        auto tree = TRY_OR_FAIL(Gfx::JPEG2000::TagTree::create((1 << n) + 1, 1));
+        Vector<u8> bits;
+        bits.append(1); // Finalize topmost node.
+        bits.append(0); // Increment value in 1 x 1 child.
+        bits.append(1); // Finalize 1 x 1 child.
+
+        // Finalize further 1 x 1 children, if present.
+        for (size_t i = 0; i < n; ++i)
+            bits.append(1);
+
+        size_t index = 0;
+        Function<ErrorOr<bool>()> read_bit = [&]() -> bool {
+            return bits[index++];
+        };
+
+        EXPECT_EQ(1u, MUST(tree.read_value(1 << n, 0, read_bit)));
+
+        // This will read either 3 or 3 + n bits, depending on the interpretation.
+        EXPECT_EQ(index, 3u + n);
+    }
+}
+
 TEST_CASE(test_pam_rgb)
 {
     auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("pnm/2x1.pam"sv)));
@@ -520,6 +881,18 @@ TEST_CASE(test_png)
     TRY_OR_FAIL(expect_single_frame(*plugin_decoder));
 }
 
+TEST_CASE(test_exif)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("png/exif.png"sv)));
+    EXPECT(Gfx::PNGImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::PNGImageDecoderPlugin::create(file->bytes()));
+
+    TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 100, 200 }));
+    EXPECT(plugin_decoder->metadata().has_value());
+    auto const& exif_metadata = static_cast<Gfx::ExifMetadata const&>(plugin_decoder->metadata().value());
+    EXPECT_EQ(*exif_metadata.orientation(), Gfx::TIFF::Orientation::Rotate90Clockwise);
+}
+
 TEST_CASE(test_png_malformed_frame)
 {
     Array test_inputs = {
@@ -547,7 +920,7 @@ TEST_CASE(test_ppm)
 TEST_CASE(test_targa_bottom_left)
 {
     auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tga/buggie-bottom-left-uncompressed.tga"sv)));
-    EXPECT(TRY_OR_FAIL(Gfx::TGAImageDecoderPlugin::validate_before_create(file->bytes())));
+    EXPECT(Gfx::TGAImageDecoderPlugin::validate_before_create(file->bytes()));
     auto plugin_decoder = TRY_OR_FAIL(Gfx::TGAImageDecoderPlugin::create(file->bytes()));
 
     TRY_OR_FAIL(expect_single_frame(*plugin_decoder));
@@ -556,7 +929,7 @@ TEST_CASE(test_targa_bottom_left)
 TEST_CASE(test_targa_top_left)
 {
     auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tga/buggie-top-left-uncompressed.tga"sv)));
-    EXPECT(TRY_OR_FAIL(Gfx::TGAImageDecoderPlugin::validate_before_create(file->bytes())));
+    EXPECT(Gfx::TGAImageDecoderPlugin::validate_before_create(file->bytes()));
     auto plugin_decoder = TRY_OR_FAIL(Gfx::TGAImageDecoderPlugin::create(file->bytes()));
 
     TRY_OR_FAIL(expect_single_frame(*plugin_decoder));
@@ -565,7 +938,7 @@ TEST_CASE(test_targa_top_left)
 TEST_CASE(test_targa_bottom_left_compressed)
 {
     auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tga/buggie-bottom-left-compressed.tga"sv)));
-    EXPECT(TRY_OR_FAIL(Gfx::TGAImageDecoderPlugin::validate_before_create(file->bytes())));
+    EXPECT(Gfx::TGAImageDecoderPlugin::validate_before_create(file->bytes()));
     auto plugin_decoder = TRY_OR_FAIL(Gfx::TGAImageDecoderPlugin::create(file->bytes()));
 
     TRY_OR_FAIL(expect_single_frame(*plugin_decoder));
@@ -574,10 +947,42 @@ TEST_CASE(test_targa_bottom_left_compressed)
 TEST_CASE(test_targa_top_left_compressed)
 {
     auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tga/buggie-top-left-compressed.tga"sv)));
-    EXPECT(TRY_OR_FAIL(Gfx::TGAImageDecoderPlugin::validate_before_create(file->bytes())));
+    EXPECT(Gfx::TGAImageDecoderPlugin::validate_before_create(file->bytes()));
     auto plugin_decoder = TRY_OR_FAIL(Gfx::TGAImageDecoderPlugin::create(file->bytes()));
 
     TRY_OR_FAIL(expect_single_frame(*plugin_decoder));
+}
+
+TEST_CASE(test_targa_black_and_white_uncompressed)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tga/buggie-black-and-white-uncompressed.tga"sv)));
+    EXPECT(Gfx::TGAImageDecoderPlugin::validate_before_create(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::TGAImageDecoderPlugin::create(file->bytes()));
+
+    TRY_OR_FAIL(expect_single_frame(*plugin_decoder));
+}
+
+TEST_CASE(test_targa_image_descriptor)
+{
+    Array test_inputs = {
+        TEST_INPUT("tga/square-bottom-left.tga"sv),
+        TEST_INPUT("tga/square-bottom-right.tga"sv),
+        TEST_INPUT("tga/square-top-left.tga"sv),
+        TEST_INPUT("tga/square-top-right.tga"sv),
+    };
+
+    for (auto test_input : test_inputs) {
+        auto file = TRY_OR_FAIL(Core::MappedFile::map(test_input));
+        EXPECT(Gfx::TGAImageDecoderPlugin::validate_before_create(file->bytes()));
+        auto plugin_decoder = TRY_OR_FAIL(Gfx::TGAImageDecoderPlugin::create(file->bytes()));
+
+        auto frame = TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 2, 2 }));
+
+        EXPECT_EQ(frame.image->get_pixel(0, 0), Gfx::Color::NamedColor::Red);
+        EXPECT_EQ(frame.image->get_pixel(1, 0), Gfx::Color::NamedColor::Green);
+        EXPECT_EQ(frame.image->get_pixel(0, 1), Gfx::Color::NamedColor::Blue);
+        EXPECT_EQ(frame.image->get_pixel(1, 1), Gfx::Color::NamedColor::Magenta);
+    }
 }
 
 TEST_CASE(test_tiff_uncompressed)
@@ -607,6 +1012,70 @@ TEST_CASE(test_tiff_ccitt_rle)
 TEST_CASE(test_tiff_ccitt3)
 {
     auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tiff/ccitt3.tiff"sv)));
+    EXPECT(Gfx::TIFFImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::TIFFImageDecoderPlugin::create(file->bytes()));
+
+    auto frame = TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 400, 300 }));
+
+    EXPECT_EQ(frame.image->get_pixel(0, 0), Gfx::Color::NamedColor::White);
+    EXPECT_EQ(frame.image->get_pixel(60, 75), Gfx::Color::NamedColor::Black);
+}
+
+TEST_CASE(test_tiff_ccitt3_no_tags)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tiff/ccitt3_no_tags.tiff"sv)));
+    EXPECT(Gfx::TIFFImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::TIFFImageDecoderPlugin::create(file->bytes()));
+
+    auto frame = TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 6, 4 }));
+
+    EXPECT_EQ(frame.image->get_pixel(0, 0), Gfx::Color::NamedColor::White);
+    EXPECT_EQ(frame.image->get_pixel(3, 0), Gfx::Color::NamedColor::Black);
+    EXPECT_EQ(frame.image->get_pixel(2, 2), Gfx::Color::NamedColor::White);
+    EXPECT_EQ(frame.image->get_pixel(5, 3), Gfx::Color::NamedColor::White);
+}
+
+TEST_CASE(test_tiff_ccitt3_fill)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tiff/ccitt3_1d_fill.tiff"sv)));
+    EXPECT(Gfx::TIFFImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::TIFFImageDecoderPlugin::create(file->bytes()));
+
+    auto frame = TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 6, 4 }));
+
+    EXPECT_EQ(frame.image->get_pixel(0, 0), Gfx::Color::NamedColor::White);
+    EXPECT_EQ(frame.image->get_pixel(3, 0), Gfx::Color::NamedColor::Black);
+    EXPECT_EQ(frame.image->get_pixel(2, 2), Gfx::Color::NamedColor::White);
+    EXPECT_EQ(frame.image->get_pixel(5, 3), Gfx::Color::NamedColor::White);
+}
+
+TEST_CASE(test_tiff_ccitt3_2d)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tiff/ccitt3_2d.tiff"sv)));
+    EXPECT(Gfx::TIFFImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::TIFFImageDecoderPlugin::create(file->bytes()));
+
+    auto frame = TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 400, 300 }));
+
+    EXPECT_EQ(frame.image->get_pixel(0, 0), Gfx::Color::NamedColor::White);
+    EXPECT_EQ(frame.image->get_pixel(60, 75), Gfx::Color::NamedColor::Black);
+}
+
+TEST_CASE(test_tiff_ccitt3_2d_fill)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tiff/ccitt3_2d_fill.tiff"sv)));
+    EXPECT(Gfx::TIFFImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::TIFFImageDecoderPlugin::create(file->bytes()));
+
+    auto frame = TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 400, 300 }));
+
+    EXPECT_EQ(frame.image->get_pixel(0, 0), Gfx::Color::NamedColor::White);
+    EXPECT_EQ(frame.image->get_pixel(60, 75), Gfx::Color::NamedColor::Black);
+}
+
+TEST_CASE(test_tiff_ccitt4)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tiff/ccitt4.tiff"sv)));
     EXPECT(Gfx::TIFFImageDecoderPlugin::sniff(file->bytes()));
     auto plugin_decoder = TRY_OR_FAIL(Gfx::TIFFImageDecoderPlugin::create(file->bytes()));
 
@@ -760,6 +1229,18 @@ TEST_CASE(test_tiff_cmyk)
     EXPECT_EQ(frame.image->get_pixel(0, 0), Gfx::Color::NamedColor::White);
     // I stripped the ICC profile from the image, so we can't test for equality with Red here.
     EXPECT_NE(frame.image->get_pixel(60, 75), Gfx::Color::NamedColor::White);
+}
+
+TEST_CASE(test_tiff_tiled)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tiff/tiled.tiff"sv)));
+    EXPECT(Gfx::TIFFImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::TIFFImageDecoderPlugin::create(file->bytes()));
+
+    auto frame = TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 400, 300 }));
+
+    EXPECT_EQ(frame.image->get_pixel(0, 0), Gfx::Color::NamedColor::White);
+    EXPECT_EQ(frame.image->get_pixel(60, 75), Gfx::Color::NamedColor::Red);
 }
 
 TEST_CASE(test_tiff_invalid_tag)
@@ -1044,9 +1525,9 @@ TEST_CASE(test_webp_extended_lossless_animated)
     EXPECT(Gfx::WebPImageDecoderPlugin::sniff(file->bytes()));
     auto plugin_decoder = TRY_OR_FAIL(Gfx::WebPImageDecoderPlugin::create(file->bytes()));
 
+    EXPECT_EQ(plugin_decoder->loop_count(), 42u);
     EXPECT_EQ(plugin_decoder->frame_count(), 8u);
     EXPECT(plugin_decoder->is_animated());
-    EXPECT_EQ(plugin_decoder->loop_count(), 42u);
 
     EXPECT_EQ(plugin_decoder->size(), Gfx::IntSize(990, 1050));
 
@@ -1058,7 +1539,7 @@ TEST_CASE(test_webp_extended_lossless_animated)
         EXPECT_EQ(frame.image->get_pixel(500, 700), Gfx::Color::Yellow);
 
         // This one isn't the same in all frames.
-        EXPECT_EQ(frame.image->get_pixel(500, 0), (frame_index == 2 || frame_index == 6) ? Gfx::Color::Black : Gfx::Color(255, 255, 255, 0));
+        EXPECT_EQ(frame.image->get_pixel(500, 0), (frame_index == 2 || frame_index == 6) ? Gfx::Color::Black : Gfx::Color(0, 0, 0, 0));
     }
 }
 
@@ -1101,6 +1582,17 @@ TEST_CASE(test_tvg_malformed)
     }
 }
 
+TEST_CASE(test_tvg_rgb565)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("tvg/green-rgb565.tvg"sv)));
+    EXPECT(Gfx::TinyVGImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::TinyVGImageDecoderPlugin::create(file->bytes()));
+    auto frame = TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 100, 100 }));
+
+    // Should be a solid dark green:
+    EXPECT_EQ(frame.image->get_pixel(50, 50), Gfx::Color(0, 130, 0));
+}
+
 TEST_CASE(test_jxl_modular_simple_tree_upsample2_10bits)
 {
     auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("jxl/modular_simple_tree_upsample2_10bits_rct.jxl"sv)));
@@ -1131,6 +1623,19 @@ TEST_CASE(test_jxl_modular_property_8)
                 EXPECT_EQ(color, Gfx::Color::Yellow);
         }
     }
+}
+
+TEST_CASE(test_jxl_icc)
+{
+    auto file = TRY_OR_FAIL(Core::MappedFile::map(TEST_INPUT("jxl/icc.jxl"sv)));
+    EXPECT(Gfx::JPEGXLImageDecoderPlugin::sniff(file->bytes()));
+    auto plugin_decoder = TRY_OR_FAIL(Gfx::JPEGXLImageDecoderPlugin::create(file->bytes()));
+    EXPECT(TRY_OR_FAIL(plugin_decoder->icc_data()).has_value());
+    EXPECT_EQ(TRY_OR_FAIL(plugin_decoder->icc_data()).value().size(), 2644u);
+
+    // FIXME: Also make sure we can decode the image. I unfortunately was unable to create an image
+    //        with both an ICC profile and only features that we support.
+    // TRY_OR_FAIL(expect_single_frame_of_size(*plugin_decoder, { 32, 32 }));
 }
 
 TEST_CASE(test_dds)

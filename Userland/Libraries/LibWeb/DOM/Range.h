@@ -35,8 +35,6 @@ public:
 
     virtual ~Range() override;
 
-    // FIXME: There are a ton of methods missing here.
-
     WebIDL::ExceptionOr<void> set_start(Node& node, WebIDL::UnsignedLong offset);
     WebIDL::ExceptionOr<void> set_end(Node& node, WebIDL::UnsignedLong offset);
     WebIDL::ExceptionOr<void> set_start_before(Node& node);
@@ -46,6 +44,11 @@ public:
     WebIDL::ExceptionOr<void> select_node(Node& node);
     void collapse(bool to_start);
     WebIDL::ExceptionOr<void> select_node_contents(Node&);
+
+    void increase_start_offset(Badge<Node>, WebIDL::UnsignedLong);
+    void increase_end_offset(Badge<Node>, WebIDL::UnsignedLong);
+    void decrease_start_offset(Badge<Node>, WebIDL::UnsignedLong);
+    void decrease_end_offset(Badge<Node>, WebIDL::UnsignedLong);
 
     // https://dom.spec.whatwg.org/#dom-range-start_to_start
     enum HowToCompareBoundaryPoints : WebIDL::UnsignedShort {
@@ -85,8 +88,8 @@ public:
 
     static HashTable<Range*>& live_ranges();
 
-    JS::NonnullGCPtr<Geometry::DOMRectList> get_client_rects() const;
-    JS::NonnullGCPtr<Geometry::DOMRect> get_bounding_client_rect() const;
+    JS::NonnullGCPtr<Geometry::DOMRectList> get_client_rects();
+    JS::NonnullGCPtr<Geometry::DOMRect> get_bounding_client_rect();
 
     bool contains_node(Node const&) const;
 

@@ -9,9 +9,10 @@
 #include <AK/ByteBuffer.h>
 #include <AK/Forward.h>
 #include <AK/Optional.h>
+#include <AK/Time.h>
 #include <AK/Types.h>
 #include <LibCore/ConfigFile.h>
-#include <LibCore/DateTime.h>
+#include <LibCrypto/ASN1/DER.h>
 #include <LibCrypto/BigInt/UnsignedBigInteger.h>
 #include <LibCrypto/PK/RSA.h>
 #include <LibTLS/Extensions.h>
@@ -195,22 +196,22 @@ public:
 
     ErrorOr<AK::HashSetResult> set(String key, String value)
     {
-        return m_members.try_set(key, value);
+        return m_members.try_set(move(key), move(value));
     }
 
     Optional<String> get(StringView key) const
     {
-        return m_members.get(key);
+        return m_members.get(key).copy();
     }
 
     Optional<String> get(AttributeType key) const
     {
-        return m_members.get(enum_value(key));
+        return m_members.get(enum_value(key)).copy();
     }
 
     Optional<String> get(ObjectClass key) const
     {
-        return m_members.get(enum_value(key));
+        return m_members.get(enum_value(key)).copy();
     }
 
     String common_name() const
@@ -223,14 +224,9 @@ public:
         return String();
     }
 
-    String organizational_unit()
+    String organizational_unit() const
     {
-        auto entry = get(AttributeType::Ou);
-        if (entry.has_value()) {
-            return entry.value();
-        }
-
-        return String();
+        return get(AttributeType::Ou).value_or({});
     }
 
 private:
@@ -238,8 +234,8 @@ private:
 };
 
 struct Validity {
-    Core::DateTime not_before;
-    Core::DateTime not_after;
+    UnixDateTime not_before;
+    UnixDateTime not_after;
 };
 
 class SubjectPublicKey {
@@ -249,6 +245,19 @@ public:
     AlgorithmIdentifier algorithm;
     ByteBuffer raw_key;
 };
+ErrorOr<SubjectPublicKey> parse_subject_public_key_info(Crypto::ASN1::Decoder& decoder, Vector<StringView> current_scope = {});
+
+// https://www.rfc-editor.org/rfc/rfc5208#section-5
+class PrivateKey {
+public:
+    Crypto::PK::RSAPrivateKey<Crypto::UnsignedBigInteger> rsa;
+
+    AlgorithmIdentifier algorithm;
+    ByteBuffer raw_key;
+
+    // FIXME: attributes [0]  IMPLICIT Attributes OPTIONAL
+};
+ErrorOr<PrivateKey> parse_private_key_info(Crypto::ASN1::Decoder& decoder, Vector<StringView> current_scope = {});
 
 class Certificate {
 public:
@@ -292,11 +301,11 @@ public:
     Vector<Certificate> const& certificates() const { return m_ca_certificates; }
 
     static ErrorOr<Vector<Certificate>> parse_pem_root_certificate_authorities(ByteBuffer&);
-    static ErrorOr<Vector<Certificate>> load_certificates(StringView custom_cert_path = {});
+    static ErrorOr<Vector<Certificate>> load_certificates(Span<ByteString> custom_cert_paths = {});
 
     static DefaultRootCACertificates& the();
 
-    static void set_default_certificate_path(String);
+    static void set_default_certificate_paths(Span<ByteString> paths);
 
 private:
     Vector<Certificate> m_ca_certificates;

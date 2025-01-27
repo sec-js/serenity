@@ -210,16 +210,27 @@ public:
         return size();
     }
 
-    [[nodiscard]] bool constexpr contains_slow(T const& value) const
+    template<typename V>
+    [[nodiscard]] constexpr bool contains_slow(V const& value) const
     {
         for (size_t i = 0; i < size(); ++i) {
-            if (at(i) == value)
+            if (Traits<RemoveReference<T>>::equals(at(i), value))
                 return true;
         }
         return false;
     }
 
-    [[nodiscard]] bool constexpr starts_with(ReadonlySpan<T> other) const
+    template<typename V>
+    [[nodiscard]] constexpr bool filled_with(V const& value) const
+    {
+        for (size_t i = 0; i < size(); ++i) {
+            if (!Traits<RemoveReference<T>>::equals(at(i), value))
+                return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] constexpr bool starts_with(ReadonlySpan<T> other) const
     {
         if (size() < other.size())
             return false;
@@ -227,7 +238,7 @@ public:
         return TypedTransfer<T>::compare(data(), other.data(), other.size());
     }
 
-    [[nodiscard]] size_t constexpr matching_prefix_length(ReadonlySpan<T> other) const
+    [[nodiscard]] constexpr size_t matching_prefix_length(ReadonlySpan<T> other) const
     {
         auto maximum_length = min(size(), other.size());
 

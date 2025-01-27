@@ -10,8 +10,8 @@
 #include <AK/ByteString.h>
 #include <AK/HashMap.h>
 #include <AK/OwnPtr.h>
-#include <AK/URL.h>
 #include <LibHTTP/Job.h>
+#include <LibURL/URL.h>
 #include <RequestServer/ConnectionFromClient.h>
 #include <RequestServer/HttpRequest.h>
 #include <RequestServer/Protocol.h>
@@ -24,10 +24,14 @@ public:
     using JobType = HTTP::Job;
     using RequestType = HttpRequest;
 
-    HttpProtocol();
     ~HttpProtocol() override = default;
 
-    virtual OwnPtr<Request> start_request(ConnectionFromClient&, ByteString const& method, const URL&, HashMap<ByteString, ByteString> const& headers, ReadonlyBytes body, Core::ProxyData proxy_data = {}) override;
+    static void install();
+
+private:
+    HttpProtocol();
+
+    virtual OwnPtr<Request> start_request(i32, ConnectionFromClient&, ByteString const& method, URL::URL const&, HTTP::HeaderMap const& headers, ReadonlyBytes body, Core::ProxyData proxy_data = {}) override;
 };
 
 }

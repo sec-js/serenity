@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibELF/Arch/GenericDynamicRelocationType.h>
 #include <LibELF/ELFABI.h>
 #include <LibELF/Relocation.h>
 
 namespace ELF {
 
-bool perform_relative_relocations(FlatPtr base_address)
+[[gnu::no_stack_protector]] bool perform_relative_relocations(FlatPtr base_address)
 {
-
     Elf_Ehdr* header = (Elf_Ehdr*)(base_address);
     Elf_Phdr* pheader = (Elf_Phdr*)(base_address + header->e_phoff);
     FlatPtr dynamic_section_addr = 0;
@@ -59,7 +59,7 @@ bool perform_relative_relocations(FlatPtr base_address)
     for (unsigned i = 0; i < relocation_count; ++i) {
         size_t offset_in_section = i * relocation_entry_size;
         auto* relocation = (Elf_Rela*)(relocation_section_addr + offset_in_section);
-        VERIFY(ELF64_R_TYPE(relocation->r_info) == R_X86_64_RELATIVE || ELF64_R_TYPE(relocation->r_info) == R_AARCH64_RELATIVE);
+        VERIFY(static_cast<GenericDynamicRelocationType>(ELF64_R_TYPE(relocation->r_info)) == GenericDynamicRelocationType::RELATIVE);
         auto* patch_address = (FlatPtr*)(base_address + relocation->r_offset);
         FlatPtr relocated_address;
         if (use_addend) {

@@ -5,6 +5,7 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/WebGLContextEventPrototype.h>
 #include <LibWeb/WebGL/WebGLContextEvent.h>
 
 namespace Web::WebGL {
@@ -32,7 +33,7 @@ WebGLContextEvent::~WebGLContextEvent() = default;
 void WebGLContextEvent::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::WebGLContextEventPrototype>(realm, "WebGLContextEvent"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(WebGLContextEvent);
 }
 
 }

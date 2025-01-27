@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLBodyElementPrototype.h>
 #include <LibWeb/CSS/StyleProperties.h>
-#include <LibWeb/CSS/StyleValues/ColorStyleValue.h>
+#include <LibWeb/CSS/StyleValues/CSSColorValue.h>
 #include <LibWeb/CSS/StyleValues/ImageStyleValue.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/HTMLBodyElement.h>
@@ -35,7 +36,7 @@ void HTMLBodyElement::visit_edges(Visitor& visitor)
 void HTMLBodyElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLBodyElementPrototype>(realm, "HTMLBodyElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLBodyElement);
 }
 
 void HTMLBodyElement::apply_presentational_hints(CSS::StyleProperties& style) const
@@ -45,27 +46,27 @@ void HTMLBodyElement::apply_presentational_hints(CSS::StyleProperties& style) co
             // https://html.spec.whatwg.org/multipage/rendering.html#the-page:rules-for-parsing-a-legacy-colour-value
             auto color = parse_legacy_color_value(value);
             if (color.has_value())
-                style.set_property(CSS::PropertyID::BackgroundColor, CSS::ColorStyleValue::create(color.value()), nullptr);
+                style.set_property(CSS::PropertyID::BackgroundColor, CSS::CSSColorValue::create_from_color(color.value()));
         } else if (name.equals_ignoring_ascii_case("text"sv)) {
             // https://html.spec.whatwg.org/multipage/rendering.html#the-page:rules-for-parsing-a-legacy-colour-value-2
             auto color = parse_legacy_color_value(value);
             if (color.has_value())
-                style.set_property(CSS::PropertyID::Color, CSS::ColorStyleValue::create(color.value()), nullptr);
+                style.set_property(CSS::PropertyID::Color, CSS::CSSColorValue::create_from_color(color.value()));
         } else if (name.equals_ignoring_ascii_case("background"sv)) {
             VERIFY(m_background_style_value);
-            style.set_property(CSS::PropertyID::BackgroundImage, *m_background_style_value, nullptr);
+            style.set_property(CSS::PropertyID::BackgroundImage, *m_background_style_value);
         }
     });
 }
 
-void HTMLBodyElement::attribute_changed(FlyString const& name, Optional<String> const& value)
+void HTMLBodyElement::attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value)
 {
-    HTMLElement::attribute_changed(name, value);
+    HTMLElement::attribute_changed(name, old_value, value);
     if (name.equals_ignoring_ascii_case("link"sv)) {
         // https://html.spec.whatwg.org/multipage/rendering.html#the-page:rules-for-parsing-a-legacy-colour-value-3
         auto color = parse_legacy_color_value(value.value_or(String {}));
         if (color.has_value())
-            document().set_link_color(color.value());
+            document().set_normal_link_color(color.value());
     } else if (name.equals_ignoring_ascii_case("alink"sv)) {
         // https://html.spec.whatwg.org/multipage/rendering.html#the-page:rules-for-parsing-a-legacy-colour-value-5
         auto color = parse_legacy_color_value(value.value_or(String {}));
@@ -94,7 +95,7 @@ void HTMLBodyElement::attribute_changed(FlyString const& name, Optional<String> 
 #undef __ENUMERATE
 }
 
-DOM::EventTarget& HTMLBodyElement::global_event_handlers_to_event_target(FlyString const& event_name)
+JS::GCPtr<DOM::EventTarget> HTMLBodyElement::global_event_handlers_to_event_target(FlyString const& event_name)
 {
     // NOTE: This is a little weird, but IIUC document.body.onload actually refers to window.onload
     // NOTE: document.body can return either a HTMLBodyElement or HTMLFrameSetElement, so both these elements must support this mapping.
@@ -104,7 +105,7 @@ DOM::EventTarget& HTMLBodyElement::global_event_handlers_to_event_target(FlyStri
     return *this;
 }
 
-DOM::EventTarget& HTMLBodyElement::window_event_handlers_to_event_target()
+JS::GCPtr<DOM::EventTarget> HTMLBodyElement::window_event_handlers_to_event_target()
 {
     // All WindowEventHandlers on HTMLFrameSetElement (e.g. document.body.onrejectionhandled) are mapped to window.on{event}.
     // NOTE: document.body can return either a HTMLBodyElement or HTMLFrameSetElement, so both these elements must support this mapping.

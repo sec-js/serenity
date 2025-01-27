@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <AK/BigIntBase.h>
 #include <AK/ByteBuffer.h>
 #include <AK/ByteString.h>
 #include <AK/Concepts.h>
@@ -24,6 +25,8 @@ constexpr size_t STARTING_WORD_SIZE = 32;
 class UnsignedBigInteger {
 public:
     using Word = u32;
+    using StorageSpan = AK::Detail::StorageSpan<Word, false>;
+    using ConstStorageSpan = AK::Detail::StorageSpan<Word const, false>;
     static constexpr size_t BITS_IN_WORD = 32;
 
     // This constructor accepts any unsigned with size up to Word.
@@ -99,6 +102,9 @@ public:
     // The "trimmed length" is the number of words after trimming leading zeroed words
     [[nodiscard]] size_t trimmed_length() const;
 
+    [[nodiscard]] size_t byte_length() const { return length() * sizeof(Word); }
+    [[nodiscard]] size_t trimmed_byte_length() const { return trimmed_length() * sizeof(Word); }
+
     void clamp_to_trimmed_length();
     void resize_with_leading_zeros(size_t num_words);
 
@@ -111,6 +117,7 @@ public:
     [[nodiscard]] UnsignedBigInteger bitwise_xor(UnsignedBigInteger const& other) const;
     [[nodiscard]] UnsignedBigInteger bitwise_not_fill_to_one_based_index(size_t) const;
     [[nodiscard]] UnsignedBigInteger shift_left(size_t num_bits) const;
+    [[nodiscard]] UnsignedBigInteger shift_right(size_t num_bits) const;
     [[nodiscard]] UnsignedBigInteger multiplied_by(UnsignedBigInteger const& other) const;
     [[nodiscard]] UnsignedDivisionResult divided_by(UnsignedBigInteger const& divisor) const;
 
@@ -134,9 +141,15 @@ public:
 
 private:
     friend class UnsignedBigIntegerAlgorithms;
+
     // Little endian
     // m_word[0] + m_word[1] * Word::MAX + m_word[2] * Word::MAX * Word::MAX + ...
     Vector<Word, STARTING_WORD_SIZE> m_words;
+    StorageSpan words_span() { return { m_words.data(), m_words.size() }; }
+    ConstStorageSpan words_span() const
+    {
+        return { m_words.data(), m_words.size() };
+    }
 
     mutable u32 m_cached_hash { 0 };
 

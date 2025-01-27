@@ -22,7 +22,7 @@ class MediaList final : public Bindings::PlatformObject {
 
 public:
     [[nodiscard]] static JS::NonnullGCPtr<MediaList> create(JS::Realm&, Vector<NonnullRefPtr<MediaQuery>>&&);
-    ~MediaList() = default;
+    virtual ~MediaList() override = default;
 
     String media_text() const;
     void set_media_text(StringView);
@@ -31,8 +31,7 @@ public:
     void append_medium(StringView);
     void delete_medium(StringView);
 
-    virtual bool is_supported_property_index(u32 index) const override;
-    virtual WebIDL::ExceptionOr<JS::Value> item_value(size_t index) const override;
+    virtual Optional<JS::Value> item_value(size_t index) const override;
 
     bool evaluate(HTML::Window const&);
     bool matches() const;

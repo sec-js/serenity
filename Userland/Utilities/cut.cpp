@@ -7,6 +7,7 @@
 #include <AK/ByteString.h>
 #include <AK/QuickSort.h>
 #include <AK/StdLibExtras.h>
+#include <AK/String.h>
 #include <AK/Vector.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
@@ -30,6 +31,11 @@ struct Range {
 
         m_from = min(m_from, other.m_from);
         m_to = max(m_to, other.m_to);
+    }
+
+    bool contains(size_t x) const
+    {
+        return m_from <= x && m_to >= x;
     }
 };
 
@@ -124,7 +130,7 @@ static bool expand_list(ByteString& list, Vector<Range>& ranges)
 static void process_line_bytes(StringView line, Vector<Range> const& ranges)
 {
     for (auto& i : ranges) {
-        if (i.m_from >= line.length())
+        if (i.m_from > line.length())
             continue;
 
         auto to = min(i.m_to, line.length());
@@ -132,6 +138,23 @@ static void process_line_bytes(StringView line, Vector<Range> const& ranges)
         out("{}", sub_string);
     }
     outln();
+}
+
+static ErrorOr<void> process_line_characters(StringView line, Vector<Range> const& ranges)
+{
+    for (auto const& range : ranges) {
+        if (range.m_from > line.length())
+            continue;
+
+        auto s = TRY(String::from_utf8(line));
+        size_t i = 1;
+        for (auto c : s.code_points()) {
+            if (range.contains(i++))
+                out("{}", String::from_code_point(c));
+        }
+    }
+    outln();
+    return {};
 }
 
 static void process_line_fields(StringView line, Vector<Range> const& ranges, char delimiter, bool only_print_delimited_lines)
@@ -157,6 +180,7 @@ static void process_line_fields(StringView line, Vector<Range> const& ranges, ch
 ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     ByteString byte_list = "";
+    ByteString character_list = "";
     ByteString fields_list = "";
     ByteString delimiter = "\t";
     bool only_print_delimited_lines = false;
@@ -166,24 +190,26 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     Core::ArgsParser args_parser;
     args_parser.add_positional_argument(files, "file(s) to cut", "file", Core::ArgsParser::Required::No);
     args_parser.add_option(byte_list, "select only these bytes", "bytes", 'b', "list");
+    args_parser.add_option(character_list, "select only these characters", "characters", 'c', "list");
     args_parser.add_option(fields_list, "select only these fields", "fields", 'f', "list");
     args_parser.add_option(delimiter, "set a custom delimiter", "delimiter", 'd', "delimiter");
     args_parser.add_option(only_print_delimited_lines, "suppress lines which don't contain any field delimiter characters", "only-delimited", 's');
     args_parser.parse(arguments);
 
-    bool selected_bytes = (byte_list != "");
-    bool selected_fields = (fields_list != "");
+    bool const selected_bytes = (byte_list != "");
+    bool const selected_characters = (character_list != "");
+    bool const selected_fields = (fields_list != "");
 
-    int selected_options_count = (selected_bytes ? 1 : 0) + (selected_fields ? 1 : 0);
+    int const selected_options_count = (selected_bytes ? 1 : 0) + (selected_characters ? 1 : 0) + (selected_fields ? 1 : 0);
 
     if (selected_options_count == 0) {
-        warnln("cut: you must specify a list of bytes, or fields");
+        warnln("cut: you must specify a list of bytes, characters, or fields");
         args_parser.print_usage(stderr, arguments.strings[0]);
         return 1;
     }
 
     if (selected_options_count > 1) {
-        warnln("cut: you must specify only one of bytes, or fields");
+        warnln("cut: you must specify only one of bytes, characters, or fields");
         args_parser.print_usage(stderr, arguments.strings[0]);
         return 1;
     }
@@ -199,6 +225,8 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 
     if (selected_bytes) {
         ranges_list = byte_list;
+    } else if (selected_characters) {
+        ranges_list = character_list;
     } else if (selected_fields) {
         ranges_list = fields_list;
     } else {
@@ -244,14 +272,16 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         }
         auto file = TRY(Core::InputBufferedFile::create(maybe_file.release_value()));
 
-        Array<u8, PAGE_SIZE> buffer;
-        while (TRY(file->can_read_line())) {
-            auto line = TRY(file->read_line(buffer));
-            if (line == "\n" && TRY(file->can_read_line()))
+        auto buffer = TRY(ByteBuffer::create_uninitialized(PAGE_SIZE));
+        while (!file->is_eof()) {
+            auto line = TRY(file->read_line_with_resize(buffer));
+            if (line.is_empty() && file->is_eof())
                 break;
 
             if (selected_bytes) {
                 process_line_bytes(line, disjoint_ranges);
+            } else if (selected_characters) {
+                TRY(process_line_characters(line, disjoint_ranges));
             } else if (selected_fields) {
                 process_line_fields(line, disjoint_ranges, delimiter[0], only_print_delimited_lines);
             } else {

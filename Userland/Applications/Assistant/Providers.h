@@ -8,11 +8,12 @@
 
 #include <AK/ByteString.h>
 #include <AK/Queue.h>
-#include <AK/URL.h>
 #include <LibDesktop/AppFile.h>
 #include <LibGUI/Desktop.h>
+#include <LibGUI/Window.h>
 #include <LibJS/Runtime/VM.h>
 #include <LibThreading/BackgroundAction.h>
+#include <LibURL/URL.h>
 #include <typeinfo>
 
 namespace Assistant {
@@ -23,7 +24,7 @@ class Result : public RefCounted<Result> {
 public:
     virtual ~Result() = default;
 
-    virtual void activate() const = 0;
+    virtual void activate(GUI::Window&) const = 0;
 
     virtual Gfx::Bitmap const* bitmap() const = 0;
 
@@ -61,7 +62,7 @@ public:
     {
     }
     ~AppResult() override = default;
-    void activate() const override;
+    void activate(GUI::Window&) const override;
 
     virtual Gfx::Bitmap const* bitmap() const override { return m_bitmap; }
 
@@ -79,7 +80,7 @@ public:
     {
     }
     ~CalculatorResult() override = default;
-    void activate() const override;
+    void activate(GUI::Window&) const override;
 
     virtual Gfx::Bitmap const* bitmap() const override { return m_bitmap; }
 
@@ -94,7 +95,7 @@ public:
     {
     }
     ~FileResult() override = default;
-    void activate() const override;
+    void activate(GUI::Window&) const override;
 
     virtual Gfx::Bitmap const* bitmap() const override;
 };
@@ -107,7 +108,7 @@ public:
     {
     }
     ~TerminalResult() override = default;
-    void activate() const override;
+    void activate(GUI::Window&) const override;
 
     virtual Gfx::Bitmap const* bitmap() const override { return m_bitmap; }
 
@@ -117,13 +118,13 @@ private:
 
 class URLResult final : public Result {
 public:
-    explicit URLResult(const URL& url)
+    explicit URLResult(const URL::URL& url)
         : Result(url.to_byte_string(), "Open URL in Browser"_string, 50)
         , m_bitmap(GUI::Icon::default_icon("app-browser"sv).bitmap_for_size(16))
     {
     }
     ~URLResult() override = default;
-    void activate() const override;
+    void activate(GUI::Window&) const override;
 
     virtual Gfx::Bitmap const* bitmap() const override { return m_bitmap; }
 

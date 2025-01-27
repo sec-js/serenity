@@ -14,6 +14,7 @@
 #include <LibGUI/ActionGroup.h>
 #include <LibGUI/CheckBox.h>
 #include <LibGUI/NumericInput.h>
+#include <LibGUI/Splitter.h>
 #include <LibGUI/Widget.h>
 
 class PDFViewer;
@@ -27,6 +28,7 @@ public:
 
     ErrorOr<void> initialize_menubar(GUI::Window&);
     void open_file(StringView path, NonnullOwnPtr<Core::File> file);
+    NonnullRefPtr<Gfx::Bitmap const> update_thumbnail_for_page(u32 page_index);
 
 private:
     PDFViewerWidget();
@@ -34,11 +36,17 @@ private:
     virtual void drop_event(GUI::DropEvent&) override;
 
     void initialize_toolbar(GUI::Toolbar&);
+
+    NonnullRefPtr<Gfx::Bitmap const> render_thumbnail_for_rendered_page(u32 page_index);
+    void reset_thumbnails();
+    void select_thumbnail(u32 page_index);
+
     PDF::PDFErrorOr<void> try_open_file(StringView path, NonnullOwnPtr<Core::File> file);
 
     RefPtr<PDFViewer> m_viewer;
     RefPtr<SidebarWidget> m_sidebar;
     NonnullRefPtr<PagedErrorsModel> m_paged_errors_model;
+    RefPtr<GUI::VerticalSplitter> m_vertical_splitter;
     RefPtr<GUI::TreeView> m_errors_tree_view;
     RefPtr<GUI::NumericInput> m_page_text_box;
     RefPtr<GUI::Label> m_total_page_label;

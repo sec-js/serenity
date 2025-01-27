@@ -9,12 +9,12 @@
 
 #pragma once
 
-#include <AK/URL.h>
 #include <LibJS/Heap/Cell.h>
 #include <LibJS/Heap/Handle.h>
+#include <LibURL/URL.h>
 #include <LibWeb/CSS/Enums.h>
 #include <LibWeb/CSS/StyleValues/AbstractImageStyleValue.h>
-#include <LibWeb/HTML/SharedImageRequest.h>
+#include <LibWeb/HTML/SharedResourceRequest.h>
 
 namespace Web::CSS {
 
@@ -22,21 +22,21 @@ class ImageStyleValue final
     : public AbstractImageStyleValue
     , public Weakable<ImageStyleValue> {
 public:
-    static ValueComparingNonnullRefPtr<ImageStyleValue> create(AK::URL const& url)
+    static ValueComparingNonnullRefPtr<ImageStyleValue> create(URL::URL const& url)
     {
         return adopt_ref(*new (nothrow) ImageStyleValue(url));
     }
-    virtual ~ImageStyleValue() override = default;
+    virtual ~ImageStyleValue() override;
 
     void visit_edges(JS::Cell::Visitor& visitor) const
     {
         // FIXME: visit_edges in non-GC allocated classes is confusing pattern.
-        //        Consider making StyleValue to be GC allocated instead.
-        visitor.visit(m_image_request);
+        //        Consider making CSSStyleValue to be GC allocated instead.
+        visitor.visit(m_resource_request);
     }
 
     virtual String to_string() const override;
-    virtual bool equals(StyleValue const& other) const override;
+    virtual bool equals(CSSStyleValue const& other) const override;
 
     virtual void load_any_resources(DOM::Document&) override;
 
@@ -45,7 +45,7 @@ public:
     Optional<CSSPixelFraction> natural_aspect_ratio() const override;
 
     virtual bool is_paintable() const override;
-    void paint(PaintContext& context, DevicePixelRect const& dest_rect, CSS::ImageRendering image_rendering) const override;
+    void paint(PaintContext& context, DevicePixelRect const& dest_rect, CSS::ImageRendering image_rendering, Vector<Gfx::Path> const& clip_paths = {}) const override;
 
     virtual Optional<Gfx::Color> color_if_single_pixel_bitmap() const override;
 
@@ -54,14 +54,14 @@ public:
     JS::GCPtr<HTML::DecodedImageData> image_data() const;
 
 private:
-    ImageStyleValue(AK::URL const&);
+    ImageStyleValue(URL::URL const&);
 
-    JS::GCPtr<HTML::SharedImageRequest> m_image_request;
+    JS::GCPtr<HTML::SharedResourceRequest> m_resource_request;
 
     void animate();
     Gfx::ImmutableBitmap const* bitmap(size_t frame_index, Gfx::IntSize = {}) const;
 
-    AK::URL m_url;
+    URL::URL m_url;
     WeakPtr<DOM::Document> m_document;
 
     size_t m_current_frame_index { 0 };

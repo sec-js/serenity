@@ -47,6 +47,8 @@ PrimitiveString::~PrimitiveString()
 {
     if (has_utf8_string())
         vm().string_cache().remove(*m_utf8_string);
+    if (has_utf16_string())
+        vm().utf16_string_cache().remove(*m_utf16_string);
     if (has_byte_string())
         vm().byte_string_cache().remove(*m_byte_string);
 }
@@ -167,7 +169,13 @@ NonnullGCPtr<PrimitiveString> PrimitiveString::create(VM& vm, Utf16String string
             return vm.single_ascii_character_string(static_cast<u8>(code_unit));
     }
 
-    return vm.heap().allocate_without_realm<PrimitiveString>(move(string));
+    auto& string_cache = vm.utf16_string_cache();
+    if (auto it = string_cache.find(string); it != string_cache.end())
+        return *it->value;
+
+    auto new_string = vm.heap().allocate_without_realm<PrimitiveString>(string);
+    string_cache.set(move(string), new_string);
+    return *new_string;
 }
 
 NonnullGCPtr<PrimitiveString> PrimitiveString::create(VM& vm, String string)
@@ -223,9 +231,7 @@ NonnullGCPtr<PrimitiveString> PrimitiveString::create(VM& vm, ByteString string)
 
 NonnullGCPtr<PrimitiveString> PrimitiveString::create(VM& vm, DeprecatedFlyString const& string)
 {
-    if (string.is_empty())
-        return vm.empty_string();
-    return create(vm, *string.impl());
+    return create(vm, ByteString { string });
 }
 
 NonnullGCPtr<PrimitiveString> PrimitiveString::create(VM& vm, PrimitiveString& lhs, PrimitiveString& rhs)

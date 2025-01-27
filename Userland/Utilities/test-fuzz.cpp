@@ -33,6 +33,8 @@
     T(ICOLoader)             \
     T(ILBMLoader)            \
     T(IMAPParser)            \
+    T(JBIG2Loader)           \
+    T(JPEG2000Loader)        \
     T(JPEGLoader)            \
     T(Js)                    \
     T(JsonParser)            \
@@ -42,6 +44,7 @@
     T(MatroskaReader)        \
     T(MD5)                   \
     T(MP3Loader)             \
+    T(PAMLoader)             \
     T(PBMLoader)             \
     T(PDF)                   \
     T(PEM)                   \

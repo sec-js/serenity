@@ -8,7 +8,8 @@
 
 AK::ByteString ak_byte_string_from_qstring(QString const& qstring)
 {
-    return AK::ByteString(qstring.toUtf8().data());
+    auto utf8_data = qstring.toUtf8();
+    return AK::ByteString(utf8_data.data(), utf8_data.size());
 }
 
 String ak_string_from_qstring(QString const& qstring)
@@ -20,4 +21,15 @@ String ak_string_from_qstring(QString const& qstring)
 QString qstring_from_ak_string(StringView ak_string)
 {
     return QString::fromUtf8(ak_string.characters_without_null_termination(), static_cast<qsizetype>(ak_string.length()));
+}
+
+URL::URL ak_url_from_qstring(QString const& qstring)
+{
+    auto utf8_data = qstring.toUtf8();
+    return URL::URL(StringView(utf8_data.data(), utf8_data.size()));
+}
+
+URL::URL ak_url_from_qurl(QUrl const& qurl)
+{
+    return ak_url_from_qstring(qurl.toString());
 }

@@ -15,6 +15,9 @@ executable("RequestServer") {
     "//Userland/Libraries/LibMain",
     "//Userland/Libraries/LibProtocol",
     "//Userland/Libraries/LibTLS",
+    "//Userland/Libraries/LibThreading",
+    "//Userland/Libraries/LibURL",
+    "//Userland/Libraries/LibWebSocket",
   ]
   sources = [
     "//Userland/Services/RequestServer/ConnectionCache.cpp",
@@ -29,4 +32,5 @@ executable("RequestServer") {
     "//Userland/Services/RequestServer/Request.cpp",
     "main.cpp",
   ]
+  output_dir = "$root_out_dir/libexec"
 }

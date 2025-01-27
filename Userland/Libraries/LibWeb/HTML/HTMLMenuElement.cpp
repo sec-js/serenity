@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLMenuElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/HTML/HTMLMenuElement.h>
 
@@ -21,7 +22,7 @@ HTMLMenuElement::~HTMLMenuElement() = default;
 void HTMLMenuElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLMenuElementPrototype>(realm, "HTMLMenuElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLMenuElement);
 }
 
 }

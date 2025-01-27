@@ -95,7 +95,7 @@ StringView character_compare_type_name(CharacterCompareType ch_compare_type)
     }
 }
 
-static StringView character_class_name(CharClass ch_class)
+StringView character_class_name(CharClass ch_class)
 {
     switch (ch_class) {
 #define __ENUMERATE_CHARACTER_CLASS(x) \
@@ -332,7 +332,7 @@ ALWAYS_INLINE ExecutionResult OpCode_CheckEnd::execute(MatchInput const& input, 
 ALWAYS_INLINE ExecutionResult OpCode_ClearCaptureGroup::execute(MatchInput const& input, MatchState& state) const
 {
     if (input.match_index < state.capture_group_matches.size()) {
-        auto& group = state.capture_group_matches[input.match_index];
+        auto& group = state.capture_group_matches.mutable_at(input.match_index);
         auto group_id = id();
         if (group_id >= group.size())
             group.resize(group_id + 1);
@@ -352,19 +352,19 @@ ALWAYS_INLINE ExecutionResult OpCode_SaveLeftCaptureGroup::execute(MatchInput co
     }
 
     if (id() >= state.capture_group_matches.at(input.match_index).size()) {
-        state.capture_group_matches.at(input.match_index).ensure_capacity(id());
+        state.capture_group_matches.mutable_at(input.match_index).ensure_capacity(id());
         auto capacity = state.capture_group_matches.at(input.match_index).capacity();
         for (size_t i = state.capture_group_matches.at(input.match_index).size(); i <= capacity; ++i)
-            state.capture_group_matches.at(input.match_index).empend();
+            state.capture_group_matches.mutable_at(input.match_index).empend();
     }
 
-    state.capture_group_matches.at(input.match_index).at(id()).left_column = state.string_position;
+    state.capture_group_matches.mutable_at(input.match_index).at(id()).left_column = state.string_position;
     return ExecutionResult::Continue;
 }
 
 ALWAYS_INLINE ExecutionResult OpCode_SaveRightCaptureGroup::execute(MatchInput const& input, MatchState& state) const
 {
-    auto& match = state.capture_group_matches.at(input.match_index).at(id());
+    auto& match = state.capture_group_matches.mutable_at(input.match_index).at(id());
     auto start_position = match.left_column;
     if (state.string_position < start_position) {
         dbgln("Right capture group {} is before left capture group {}!", state.string_position, start_position);
@@ -391,7 +391,7 @@ ALWAYS_INLINE ExecutionResult OpCode_SaveRightCaptureGroup::execute(MatchInput c
 
 ALWAYS_INLINE ExecutionResult OpCode_SaveRightNamedCaptureGroup::execute(MatchInput const& input, MatchState& state) const
 {
-    auto& match = state.capture_group_matches.at(input.match_index).at(id());
+    auto& match = state.capture_group_matches.mutable_at(input.match_index).at(id());
     auto start_position = match.left_column;
     if (state.string_position < start_position)
         return ExecutionResult::Failed_ExecuteLowPrioForks;
@@ -776,15 +776,11 @@ ALWAYS_INLINE void OpCode_Compare::compare_character_class(MatchInput const& inp
 bool OpCode_Compare::matches_character_class(CharClass character_class, u32 ch, bool insensitive)
 {
     constexpr auto is_space_or_line_terminator = [](u32 code_point) {
-        static auto space_separator = Unicode::general_category_from_string("Space_Separator"sv);
-        if (!space_separator.has_value())
-            return is_ascii_space(code_point);
-
         if ((code_point == 0x0a) || (code_point == 0x0d) || (code_point == 0x2028) || (code_point == 0x2029))
             return true;
         if ((code_point == 0x09) || (code_point == 0x0b) || (code_point == 0x0c) || (code_point == 0xfeff))
             return true;
-        return Unicode::code_point_has_general_category(code_point, *space_separator);
+        return Unicode::code_point_has_space_separator_general_category(code_point);
     };
 
     switch (character_class) {
@@ -1051,7 +1047,7 @@ ALWAYS_INLINE ExecutionResult OpCode_Repeat::execute(MatchInput const&, MatchSta
 
     if (id() >= state.repetition_marks.size())
         state.repetition_marks.resize(id() + 1);
-    auto& repetition_mark = state.repetition_marks.at(id());
+    auto& repetition_mark = state.repetition_marks.mutable_at(id());
 
     if (repetition_mark == count() - 1) {
         repetition_mark = 0;
@@ -1068,24 +1064,24 @@ ALWAYS_INLINE ExecutionResult OpCode_ResetRepeat::execute(MatchInput const&, Mat
     if (id() >= state.repetition_marks.size())
         state.repetition_marks.resize(id() + 1);
 
-    state.repetition_marks.at(id()) = 0;
+    state.repetition_marks.mutable_at(id()) = 0;
     return ExecutionResult::Continue;
 }
 
-ALWAYS_INLINE ExecutionResult OpCode_Checkpoint::execute(MatchInput const& input, MatchState& state) const
+ALWAYS_INLINE ExecutionResult OpCode_Checkpoint::execute(MatchInput const&, MatchState& state) const
 {
     auto id = this->id();
-    if (id >= input.checkpoints.size())
-        input.checkpoints.resize(id + 1);
+    if (id >= state.checkpoints.size())
+        state.checkpoints.resize(id + 1);
 
-    input.checkpoints[id] = state.string_position + 1;
+    state.checkpoints[id] = state.string_position + 1;
     return ExecutionResult::Continue;
 }
 
 ALWAYS_INLINE ExecutionResult OpCode_JumpNonEmpty::execute(MatchInput const& input, MatchState& state) const
 {
     u64 current_position = state.string_position;
-    auto checkpoint_position = input.checkpoints[checkpoint()];
+    auto checkpoint_position = state.checkpoints.get(checkpoint()).value_or(0);
 
     if (checkpoint_position != 0 && checkpoint_position != current_position + 1) {
         auto form = this->form();

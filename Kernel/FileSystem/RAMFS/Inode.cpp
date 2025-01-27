@@ -71,26 +71,6 @@ ErrorOr<void> RAMFSInode::traverse_as_directory(Function<ErrorOr<void>(FileSyste
     return {};
 }
 
-ErrorOr<void> RAMFSInode::replace_child(StringView name, Inode& new_child)
-{
-    MutexLocker locker(m_inode_lock);
-    VERIFY(is_directory());
-    VERIFY(new_child.fsid() == fsid());
-
-    auto* child = find_child_by_name(name);
-    if (!child)
-        return ENOENT;
-
-    auto old_child = child->inode;
-    child->inode = static_cast<RAMFSInode&>(new_child);
-
-    old_child->did_delete_self();
-
-    // TODO: Emit a did_replace_child event.
-
-    return {};
-}
-
 ErrorOr<NonnullOwnPtr<RAMFSInode::DataBlock>> RAMFSInode::DataBlock::create()
 {
     auto data_block_buffer_vmobject = TRY(Memory::AnonymousVMObject::try_create_with_size(DataBlock::block_size, AllocationStrategy::AllocateNow));
@@ -361,9 +341,9 @@ ErrorOr<void> RAMFSInode::remove_child(StringView name)
     return {};
 }
 
-ErrorOr<void> RAMFSInode::truncate(u64 size)
+ErrorOr<void> RAMFSInode::truncate_locked(u64 size)
 {
-    MutexLocker locker(m_inode_lock);
+    VERIFY(m_inode_lock.is_locked());
     VERIFY(!is_directory());
 
     u64 block_index = size / DataBlock::block_size + ((size % DataBlock::block_size == 0) ? 0 : 1);
@@ -380,6 +360,7 @@ ErrorOr<void> RAMFSInode::truncate(u64 size)
     }
     m_metadata.size = size;
     set_metadata_dirty(true);
+    did_modify_contents();
     return {};
 }
 

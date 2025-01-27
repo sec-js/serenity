@@ -5,13 +5,12 @@
  */
 
 #include <AK/Debug.h>
-#include <LibJS/Runtime/ConsoleObject.h>
 #include <LibJS/Runtime/Realm.h>
-#include <LibWeb/Bindings/MainThreadVM.h>
+#include <LibWeb/Bindings/WorkerPrototype.h>
+#include <LibWeb/HTML/MessagePort.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
-#include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
+#include <LibWeb/HTML/Scripting/WindowEnvironmentSettingsObject.h>
 #include <LibWeb/HTML/Worker.h>
-#include <LibWeb/WebIDL/ExceptionOr.h>
 
 namespace Web::HTML {
 
@@ -29,7 +28,7 @@ Worker::Worker(String const& script_url, WorkerOptions const& options, DOM::Docu
 void Worker::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::WorkerPrototype>(realm, "Worker"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(Worker);
 }
 
 void Worker::visit_edges(Cell::Visitor& visitor)
@@ -57,15 +56,15 @@ WebIDL::ExceptionOr<JS::NonnullGCPtr<Worker>> Worker::create(String const& scrip
     // Technically not a fixme if our policy is not to throw errors :^)
 
     // 2. Let outside settings be the current settings object.
-    auto& outside_settings = document.relevant_settings_object();
+    auto& outside_settings = current_settings_object();
 
     // 3. Parse the scriptURL argument relative to outside settings.
-    auto url = document.parse_url(script_url.to_byte_string());
+    auto url = document.parse_url(script_url);
 
     // 4. If this fails, throw a "SyntaxError" DOMException.
     if (!url.is_valid()) {
         dbgln_if(WEB_WORKER_DEBUG, "WebWorker: Invalid URL loaded '{}'.", script_url);
-        return WebIDL::SyntaxError::create(document.realm(), "url is not valid"_fly_string);
+        return WebIDL::SyntaxError::create(document.realm(), "url is not valid"_string);
     }
 
     // 5. Let worker URL be the resulting URL record.
@@ -89,7 +88,7 @@ WebIDL::ExceptionOr<JS::NonnullGCPtr<Worker>> Worker::create(String const& scrip
 }
 
 // https://html.spec.whatwg.org/multipage/workers.html#run-a-worker
-void Worker::run_a_worker(AK::URL& url, EnvironmentSettingsObject& outside_settings, JS::GCPtr<MessagePort> port, WorkerOptions const& options)
+void Worker::run_a_worker(URL::URL& url, EnvironmentSettingsObject& outside_settings, JS::GCPtr<MessagePort> port, WorkerOptions const& options)
 {
     // 1. Let is shared be true if worker is a SharedWorker object, and false otherwise.
     // FIXME: SharedWorker support
@@ -110,7 +109,7 @@ void Worker::run_a_worker(AK::URL& url, EnvironmentSettingsObject& outside_setti
     // and is shared. Run the rest of these steps in that agent.
 
     // Note: This spawns a new process to act as the 'agent' for the worker.
-    m_agent = heap().allocate<WorkerAgent>(outside_settings.realm(), url, options, port);
+    m_agent = heap().allocate<WorkerAgent>(outside_settings.realm(), url, options, port, outside_settings);
 }
 
 // https://html.spec.whatwg.org/multipage/workers.html#dom-worker-terminate
@@ -131,6 +130,16 @@ WebIDL::ExceptionOr<void> Worker::post_message(JS::Value message, StructuredSeri
     // postMessage(message, options) on the port, with the same arguments, and returned the same return value.
 
     return m_outside_port->post_message(message, options);
+}
+
+// https://html.spec.whatwg.org/multipage/workers.html#dom-worker-postmessage
+WebIDL::ExceptionOr<void> Worker::post_message(JS::Value message, Vector<JS::Handle<JS::Object>> const& transfer)
+{
+    // The postMessage(message, transfer) and postMessage(message, options) methods on Worker objects act as if,
+    // when invoked, they immediately invoked the respective postMessage(message, transfer) and
+    // postMessage(message, options) on the port, with the same arguments, and returned the same return value.
+
+    return m_outside_port->post_message(message, transfer);
 }
 
 #undef __ENUMERATE

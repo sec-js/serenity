@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Hex.h>
 #include <AK/ScopeGuard.h>
 #include <LibPDF/CommonNames.h>
 #include <LibPDF/Document.h>
@@ -139,6 +140,8 @@ PDFErrorOr<Value> Parser::parse_possible_indirect_value_or_ref()
 
 PDFErrorOr<NonnullRefPtr<IndirectValue>> Parser::parse_indirect_value(u32 index, u32 generation)
 {
+    dbgln_if(PDF_DEBUG, "Parsing indirect value {} {}", index, generation);
+
     if (!m_reader.matches("obj"))
         return error("Expected \"obj\" at beginning of indirect value");
     m_reader.move_by(3);
@@ -153,6 +156,8 @@ PDFErrorOr<NonnullRefPtr<IndirectValue>> Parser::parse_indirect_value(u32 index,
     m_reader.consume_whitespace();
 
     pop_reference();
+
+    dbgln_if(PDF_DEBUG, "Done parsing indirect value {} {}", index, generation);
 
     return make_object<IndirectValue>(index, generation, value);
 }
@@ -221,13 +226,9 @@ PDFErrorOr<NonnullRefPtr<NameObject>> Parser::parse_name()
             int hex_value = 0;
             for (int i = 0; i < 2; i++) {
                 auto ch = m_reader.consume();
-                VERIFY(isxdigit(ch));
+                VERIFY(is_ascii_hex_digit(ch));
                 hex_value *= 16;
-                if (ch <= '9') {
-                    hex_value += ch - '0';
-                } else {
-                    hex_value += ch - 'A' + 10;
-                }
+                hex_value += decode_hex_digit(ch);
             }
             builder.append(static_cast<char>(hex_value));
             continue;
@@ -361,6 +362,10 @@ PDFErrorOr<ByteString> Parser::parse_hex_string()
 
             for (int i = 0; i < 2; i++) {
                 m_reader.consume_whitespace();
+
+                if (m_reader.done())
+                    return error("unterminated hex string");
+
                 auto ch = m_reader.consume();
                 if (ch == '>') {
                     // The hex string contains an odd number of characters, and the last character
@@ -370,17 +375,11 @@ PDFErrorOr<ByteString> Parser::parse_hex_string()
                     return builder.to_byte_string();
                 }
 
-                if (!isxdigit(ch))
+                if (!is_ascii_hex_digit(ch))
                     return error("character in hex string isn't hex digit");
 
                 hex_value *= 16;
-                if (ch <= '9') {
-                    hex_value += ch - '0';
-                } else if (ch >= 'A' && ch <= 'F') {
-                    hex_value += ch - 'A' + 10;
-                } else {
-                    hex_value += ch - 'a' + 10;
-                }
+                hex_value += decode_hex_digit(ch);
             }
 
             builder.append(static_cast<char>(hex_value));
@@ -453,8 +452,11 @@ PDFErrorOr<void> Parser::unfilter_stream(NonnullRefPtr<StreamObject> stream_obje
             for (size_t i = 0; i < decode_parms_array->size(); ++i) {
                 RefPtr<DictObject> decode_parms;
                 auto entry = decode_parms_array->at(i);
-                if (entry.has<NonnullRefPtr<Object>>())
-                    decode_parms = entry.get<NonnullRefPtr<Object>>()->cast<DictObject>();
+                if (entry.has<NonnullRefPtr<Object>>()) {
+                    auto entry_object = entry.get<NonnullRefPtr<Object>>();
+                    if (entry_object->is<DictObject>())
+                        decode_parms = entry_object->cast<DictObject>();
+                }
                 decode_parms_vector.append(decode_parms);
             }
         } else {
@@ -469,7 +471,7 @@ PDFErrorOr<void> Parser::unfilter_stream(NonnullRefPtr<StreamObject> stream_obje
         if (!decode_parms_vector.is_empty())
             decode_parms = decode_parms_vector.at(i);
 
-        stream_object->buffer() = TRY(Filter::decode(stream_object->bytes(), filters.at(i), decode_parms));
+        stream_object->buffer() = TRY(Filter::decode(m_document, stream_object->bytes(), filters.at(i), decode_parms));
     }
 
     return {};
@@ -488,9 +490,7 @@ PDFErrorOr<NonnullRefPtr<StreamObject>> Parser::parse_stream(NonnullRefPtr<DictO
     auto maybe_length = dict->get(CommonNames::Length);
     if (maybe_length.has_value() && m_document->can_resolve_references()) {
         // The PDF writer has kindly provided us with the direct length of the stream
-        m_reader.save();
         auto length = TRY(m_document->resolve_to<int>(maybe_length.value()));
-        m_reader.load();
         bytes = m_reader.bytes().slice(m_reader.offset(), length);
         m_reader.move_by(length);
         m_reader.consume_whitespace();

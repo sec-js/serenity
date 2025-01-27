@@ -10,14 +10,18 @@
 #include <AK/StringBuilder.h>
 #include <LibTextCodec/Decoder.h>
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
+#include <LibWeb/Bindings/HTMLFormElementPrototype.h>
+#include <LibWeb/DOM/DOMTokenList.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
-#include <LibWeb/DOM/HTMLFormControlsCollection.h>
+#include <LibWeb/DOMURL/DOMURL.h>
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/HTML/FormControlInfrastructure.h>
 #include <LibWeb/HTML/HTMLButtonElement.h>
+#include <LibWeb/HTML/HTMLDialogElement.h>
 #include <LibWeb/HTML/HTMLFieldSetElement.h>
+#include <LibWeb/HTML/HTMLFormControlsCollection.h>
 #include <LibWeb/HTML/HTMLFormElement.h>
 #include <LibWeb/HTML/HTMLImageElement.h>
 #include <LibWeb/HTML/HTMLInputElement.h>
@@ -25,11 +29,11 @@
 #include <LibWeb/HTML/HTMLOutputElement.h>
 #include <LibWeb/HTML/HTMLSelectElement.h>
 #include <LibWeb/HTML/HTMLTextAreaElement.h>
+#include <LibWeb/HTML/RadioNodeList.h>
 #include <LibWeb/HTML/SubmitEvent.h>
 #include <LibWeb/Infra/CharacterTypes.h>
 #include <LibWeb/Infra/Strings.h>
 #include <LibWeb/Page/Page.h>
-#include <LibWeb/URL/URL.h>
 
 namespace Web::HTML {
 
@@ -51,15 +55,44 @@ HTMLFormElement::~HTMLFormElement() = default;
 void HTMLFormElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLFormElementPrototype>(realm, "HTMLFormElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLFormElement);
 }
 
 void HTMLFormElement::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_elements);
-    for (auto& element : m_associated_elements)
-        visitor.visit(element);
+    visitor.visit(m_associated_elements);
+    visitor.visit(m_planned_navigation);
+    visitor.visit(m_rel_list);
+}
+
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission
+WebIDL::ExceptionOr<void> HTMLFormElement::implicitly_submit_form()
+{
+    // If the user agent supports letting the user submit a form implicitly (for example, on some platforms hitting the
+    // "enter" key while a text control is focused implicitly submits the form), then doing so for a form, whose default
+    // button has activation behavior and is not disabled, must cause the user agent to fire a click event at that
+    // default button.
+    if (auto* default_button = this->default_button()) {
+        auto& default_button_element = default_button->form_associated_element_to_html_element();
+
+        if (default_button_element.has_activation_behavior() && default_button->enabled())
+            default_button_element.click();
+
+        return {};
+    }
+
+    // If the form has no submit button, then the implicit submission mechanism must perform the following steps:
+
+    // 1. If the form has more than one field that blocks implicit submission, then return.
+    if (number_of_fields_blocking_implicit_submission() > 1)
+        return {};
+
+    // 2. Submit the form element from the form element itself with userInvolvement set to "activation".
+    TRY(submit_form(*this, { .user_involvement = UserNavigationInvolvement::Activation }));
+
+    return {};
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
@@ -128,10 +161,6 @@ WebIDL::ExceptionOr<void> HTMLFormElement::submit_form(JS::NonnullGCPtr<HTMLElem
 
     // 6. Let encoding be the result of picking an encoding for the form.
     auto encoding = TRY_OR_THROW_OOM(vm, pick_an_encoding());
-    if (encoding != "UTF-8"sv) {
-        dbgln("FIXME: Support encodings other than UTF-8 in form submission. Returning from form submission.");
-        return {};
-    }
 
     // 7. Let entry list be the result of constructing the entry list with form, submitter, and encoding.
     auto entry_list_or_null = TRY(construct_entry_list(realm, *this, submitter, encoding));
@@ -151,17 +180,36 @@ WebIDL::ExceptionOr<void> HTMLFormElement::submit_form(JS::NonnullGCPtr<HTMLElem
 
     // 11. If method is dialog, then:
     if (method == MethodAttributeState::Dialog) {
-        // FIXME: 1. If form does not have an ancestor dialog element, then return.
-        // FIXME: 2. Let subject be form's nearest ancestor dialog element.
-        // FIXME: 3. Let result be null.
-        // FIXME: 4. If submitter is an input element whose type attribute is in the Image Button state, then:
-        //           1. Let (x, y) be the selected coordinate.
-        //           2. Set result to the concatenation of x, ",", and y.
-        // FIXME: 5. Otherwise, if submitter has a value, then set result to that value.
-        // FIXME: 6. Close the dialog subject with result.
-        // FIXME: 7. Return.
+        // 1. If form does not have an ancestor dialog element, then return.
+        // 2. Let subject be form's nearest ancestor dialog element.
+        auto* subject = first_ancestor_of_type<HTMLDialogElement>();
+        if (!subject)
+            return {};
 
-        dbgln("FIXME: Implement form submission with `dialog` action. Returning from form submission.");
+        // 3. Let result be null.
+        Optional<String> result;
+
+        // 4. If submitter is an input element whose type attribute is in the Image Button state, then:
+        if (is<HTMLInputElement>(*submitter)) {
+            auto const& input_element = static_cast<HTMLInputElement const&>(*submitter);
+
+            if (input_element.type_state() == HTMLInputElement::TypeAttributeState::ImageButton) {
+                // 1. Let (x, y) be the selected coordinate.
+                auto [x, y] = input_element.selected_coordinate();
+
+                // 2. Set result to the concatenation of x, ",", and y.
+                result = MUST(String::formatted("{},{}", x, y));
+            }
+        }
+
+        // 5. Otherwise, if submitter has a value, then set result to that value.
+        if (!result.has_value())
+            result = submitter->get_attribute_value(AttributeNames::value);
+
+        // 6. Close the dialog subject with result.
+        subject->close(move(result));
+
+        // 7. Return.
         return {};
     }
 
@@ -214,18 +262,20 @@ WebIDL::ExceptionOr<void> HTMLFormElement::submit_form(JS::NonnullGCPtr<HTMLElem
     //     Then, select the appropriate cell on that row based on method as given in the first cell of each column.
     //     Then, jump to the steps named in that cell and defined below the table.
 
-    // 	          | GET 	      | POST
+    //            | GET               | POST
     // ------------------------------------------------------
-    // http 	  | Mutate action URL |	Submit as entity body
-    // https 	  | Mutate action URL |	Submit as entity body
-    // ftp 	  | Get action URL    |	Get action URL
-    // javascript | Get action URL    |	Get action URL
-    // data 	  | Mutate action URL |	Get action URL
-    // mailto 	  | Mail with headers |	Mail as body
+    // http       | Mutate action URL | Submit as entity body
+    // https      | Mutate action URL | Submit as entity body
+    // ftp        | Get action URL    | Get action URL
+    // javascript | Get action URL    | Get action URL
+    // data       | Mutate action URL | Get action URL
+    // mailto     | Mail with headers | Mail as body
 
     // If scheme is not one of those listed in this table, then the behavior is not defined by this specification.
     // User agents should, in the absence of another specification defining this, act in a manner analogous to that defined
     // in this specification for similar schemes.
+
+    // AD-HOC: In accordance with the above paragraph, we implement file:// submission URLs the same as data: URLs.
 
     // This should have been handled above.
     VERIFY(method != MethodAttributeState::Dialog);
@@ -237,7 +287,7 @@ WebIDL::ExceptionOr<void> HTMLFormElement::submit_form(JS::NonnullGCPtr<HTMLElem
             TRY_OR_THROW_OOM(vm, submit_as_entity_body(move(parsed_action), move(entry_list), encoding_type, move(encoding), *target_navigable, history_handling, options.user_involvement));
     } else if (scheme.is_one_of("ftp"sv, "javascript"sv)) {
         get_action_url(move(parsed_action), *target_navigable, history_handling, options.user_involvement);
-    } else if (scheme == "data"sv) {
+    } else if (scheme.is_one_of("data"sv, "file"sv)) {
         if (method == MethodAttributeState::GET)
             TRY_OR_THROW_OOM(vm, mutate_action_url(move(parsed_action), move(entry_list), move(encoding), *target_navigable, history_handling, options.user_involvement));
         else
@@ -279,6 +329,29 @@ void HTMLFormElement::reset_form()
 WebIDL::ExceptionOr<void> HTMLFormElement::submit()
 {
     return submit_form(*this, { .from_submit_binding = true });
+}
+
+// https://html.spec.whatwg.org/multipage/forms.html#dom-form-requestsubmit
+WebIDL::ExceptionOr<void> HTMLFormElement::request_submit(JS::GCPtr<Element> submitter)
+{
+    // 1. If submitter is not null, then:
+    if (submitter) {
+        // 1. If submitter is not a submit button, then throw a TypeError.
+        auto* form_associated_element = dynamic_cast<FormAssociatedElement*>(submitter.ptr());
+        if (!(form_associated_element && form_associated_element->is_submit_button()))
+            return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "The submitter is not a submit button"sv };
+
+        // 2. If submitter's form owner is not this form element, then throw a "NotFoundError" DOMException.
+        if (form_associated_element->form() != this)
+            return WebIDL::NotFoundError::create(realm(), "The submitter is not owned by this form element"_string);
+    }
+    // 2. Otherwise, set submitter to this form element.
+    else {
+        submitter = this;
+    }
+
+    // 3. Submit this form element, from submitter.
+    return submit_form(static_cast<HTMLElement&>(*submitter), {});
 }
 
 // https://html.spec.whatwg.org/multipage/forms.html#dom-form-reset
@@ -444,11 +517,11 @@ static bool is_form_control(DOM::Element const& element, HTMLFormElement const& 
 }
 
 // https://html.spec.whatwg.org/multipage/forms.html#dom-form-elements
-JS::NonnullGCPtr<DOM::HTMLFormControlsCollection> HTMLFormElement::elements() const
+JS::NonnullGCPtr<HTMLFormControlsCollection> HTMLFormElement::elements() const
 {
     if (!m_elements) {
         auto& root = verify_cast<ParentNode>(const_cast<HTMLFormElement*>(this)->root());
-        m_elements = DOM::HTMLFormControlsCollection::create(root, DOM::HTMLCollection::Scope::Descendants, [this](Element const& element) {
+        m_elements = HTMLFormControlsCollection::create(root, DOM::HTMLCollection::Scope::Descendants, [this](Element const& element) {
             return is_form_control(element, *this);
         });
     }
@@ -477,46 +550,29 @@ WebIDL::ExceptionOr<bool> HTMLFormElement::report_validity()
 }
 
 // https://html.spec.whatwg.org/multipage/forms.html#category-submit
-ErrorOr<Vector<JS::NonnullGCPtr<DOM::Element>>> HTMLFormElement::get_submittable_elements()
+Vector<JS::NonnullGCPtr<DOM::Element>> HTMLFormElement::get_submittable_elements()
 {
-    Vector<JS::NonnullGCPtr<DOM::Element>> submittable_elements = {};
-    for (size_t i = 0; i < elements()->length(); i++) {
-        auto* element = elements()->item(i);
-        TRY(populate_vector_with_submittable_elements_in_tree_order(*element, submittable_elements));
-    }
+    Vector<JS::NonnullGCPtr<DOM::Element>> submittable_elements;
+
+    root().for_each_in_subtree([&](auto& node) {
+        if (auto* form_associated_element = dynamic_cast<FormAssociatedElement*>(&node)) {
+            if (form_associated_element->is_submittable() && form_associated_element->form() == this)
+                submittable_elements.append(form_associated_element->form_associated_element_to_html_element());
+        }
+
+        return TraversalDecision::Continue;
+    });
+
     return submittable_elements;
 }
 
-ErrorOr<void> HTMLFormElement::populate_vector_with_submittable_elements_in_tree_order(JS::NonnullGCPtr<DOM::Element> element, Vector<JS::NonnullGCPtr<DOM::Element>>& elements)
+// https://html.spec.whatwg.org/multipage/forms.html#dom-form-rellist
+JS::NonnullGCPtr<DOM::DOMTokenList> HTMLFormElement::rel_list()
 {
-    if (auto* form_associated_element = dynamic_cast<HTML::FormAssociatedElement*>(element.ptr())) {
-        if (form_associated_element->is_submittable())
-            TRY(elements.try_append(element));
-    }
-
-    for (size_t i = 0; i < element->children()->length(); i++) {
-        auto* child = element->children()->item(i);
-        TRY(populate_vector_with_submittable_elements_in_tree_order(*child, elements));
-    }
-
-    return {};
-}
-
-// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-fs-method
-StringView HTMLFormElement::method() const
-{
-    // The method and enctype IDL attributes must reflect the respective content attributes of the same name, limited to only known values.
-    // FIXME: This should probably be `Reflect` in the IDL.
-    auto method_state = method_state_from_form_element(*this);
-    switch (method_state) {
-    case MethodAttributeState::GET:
-        return "get"sv;
-    case MethodAttributeState::POST:
-        return "post"sv;
-    case MethodAttributeState::Dialog:
-        return "dialog"sv;
-    }
-    VERIFY_NOT_REACHED();
+    // The relList IDL attribute must reflect the rel content attribute.
+    if (!m_rel_list)
+        m_rel_list = DOM::DOMTokenList::create(*this, HTML::AttributeNames::rel);
+    return *m_rel_list;
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-fs-method
@@ -532,18 +588,27 @@ String HTMLFormElement::action() const
     // The action IDL attribute must reflect the content attribute of the same name, except that on getting, when the
     // content attribute is missing or its value is the empty string, the element's node document's URL must be returned
     // instead.
-    if (auto maybe_action = attribute(AttributeNames::action);
-        maybe_action.has_value() && !maybe_action.value().is_empty()) {
-        return maybe_action.value();
+    auto form_action_attribute = attribute(AttributeNames::action);
+    if (!form_action_attribute.has_value() || form_action_attribute.value().is_empty()) {
+        return document().url_string();
     }
 
-    return MUST(document().url().to_string());
+    return MUST(document().base_url().complete_url(form_action_attribute.value()).to_string());
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-fs-action
 WebIDL::ExceptionOr<void> HTMLFormElement::set_action(String const& value)
 {
     return set_attribute(AttributeNames::action, value);
+}
+
+void HTMLFormElement::attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value)
+{
+    HTMLElement::attribute_changed(name, old_value, value);
+    if (name == HTML::AttributeNames::rel) {
+        if (m_rel_list)
+            m_rel_list->associated_attribute_changed(value.value_or(String {}));
+    }
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#picking-an-encoding-for-the-form
@@ -585,10 +650,10 @@ ErrorOr<String> HTMLFormElement::pick_an_encoding() const
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#convert-to-a-list-of-name-value-pairs
-static ErrorOr<Vector<URL::QueryParam>> convert_to_list_of_name_value_pairs(Vector<XHR::FormDataEntry> const& entry_list)
+static ErrorOr<Vector<DOMURL::QueryParam>> convert_to_list_of_name_value_pairs(Vector<XHR::FormDataEntry> const& entry_list)
 {
     // 1. Let list be an empty list of name-value pairs.
-    Vector<URL::QueryParam> list;
+    Vector<DOMURL::QueryParam> list;
 
     // 2. For each entry of entry list:
     for (auto const& entry : entry_list) {
@@ -611,7 +676,7 @@ static ErrorOr<Vector<URL::QueryParam>> convert_to_list_of_name_value_pairs(Vect
         auto normalized_value = TRY(normalize_line_breaks(value));
 
         // 4. Append to list a new name-value pair whose name is name and whose value is value.
-        TRY(list.try_append(URL::QueryParam { .name = move(name), .value = move(normalized_value) }));
+        TRY(list.try_append(DOMURL::QueryParam { .name = move(name), .value = move(normalized_value) }));
     }
 
     // 3. Return list.
@@ -619,7 +684,7 @@ static ErrorOr<Vector<URL::QueryParam>> convert_to_list_of_name_value_pairs(Vect
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#text/plain-encoding-algorithm
-static ErrorOr<String> plain_text_encode(Vector<URL::QueryParam> const& pairs)
+static ErrorOr<String> plain_text_encode(Vector<DOMURL::QueryParam> const& pairs)
 {
     // 1. Let result be the empty string.
     StringBuilder result;
@@ -644,13 +709,13 @@ static ErrorOr<String> plain_text_encode(Vector<URL::QueryParam> const& pairs)
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#submit-mutate-action
-ErrorOr<void> HTMLFormElement::mutate_action_url(AK::URL parsed_action, Vector<XHR::FormDataEntry> entry_list, String encoding, JS::NonnullGCPtr<Navigable> target_navigable, Bindings::NavigationHistoryBehavior history_handling, UserNavigationInvolvement user_involvement)
+ErrorOr<void> HTMLFormElement::mutate_action_url(URL::URL parsed_action, Vector<XHR::FormDataEntry> entry_list, String encoding, JS::NonnullGCPtr<Navigable> target_navigable, Bindings::NavigationHistoryBehavior history_handling, UserNavigationInvolvement user_involvement)
 {
     // 1. Let pairs be the result of converting to a list of name-value pairs with entry list.
     auto pairs = TRY(convert_to_list_of_name_value_pairs(entry_list));
 
     // 2. Let query be the result of running the application/x-www-form-urlencoded serializer with pairs and encoding.
-    auto query = TRY(url_encode(pairs, encoding));
+    auto query = url_encode(pairs, encoding);
 
     // 3. Set parsed action's query component to query.
     parsed_action.set_query(query);
@@ -661,11 +726,12 @@ ErrorOr<void> HTMLFormElement::mutate_action_url(AK::URL parsed_action, Vector<X
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#submit-body
-ErrorOr<void> HTMLFormElement::submit_as_entity_body(AK::URL parsed_action, Vector<XHR::FormDataEntry> entry_list, EncodingTypeAttributeState encoding_type, [[maybe_unused]] String encoding, JS::NonnullGCPtr<Navigable> target_navigable, Bindings::NavigationHistoryBehavior history_handling, UserNavigationInvolvement user_involvement)
+ErrorOr<void> HTMLFormElement::submit_as_entity_body(URL::URL parsed_action, Vector<XHR::FormDataEntry> entry_list, EncodingTypeAttributeState encoding_type, [[maybe_unused]] String encoding, JS::NonnullGCPtr<Navigable> target_navigable, Bindings::NavigationHistoryBehavior history_handling, UserNavigationInvolvement user_involvement)
 {
     // 1. Assert: method is POST.
 
     POSTResource::RequestContentType mime_type {};
+    Vector<POSTResource::Directive> mime_type_directives;
     ByteBuffer body;
 
     // 2. Switch on enctype:
@@ -676,7 +742,7 @@ ErrorOr<void> HTMLFormElement::submit_as_entity_body(AK::URL parsed_action, Vect
         auto pairs = TRY(convert_to_list_of_name_value_pairs(entry_list));
 
         // 2. Let body be the result of running the application/x-www-form-urlencoded serializer with pairs and encoding.
-        body = TRY(ByteBuffer::copy(TRY(url_encode(pairs, encoding)).bytes()));
+        body = TRY(ByteBuffer::copy(url_encode(pairs, encoding).bytes()));
 
         // 3. Set body to the result of encoding body.
         // NOTE: `encoding` refers to `UTF-8 encode`, which body already is encoded as because it uses AK::String.
@@ -694,7 +760,8 @@ ErrorOr<void> HTMLFormElement::submit_as_entity_body(AK::URL parsed_action, Vect
         // 2. Let mimeType be the isomorphic encoding of the concatenation of "multipart/form-data; boundary=" and the multipart/form-data
         //    boundary string generated by the multipart/form-data encoding algorithm.
         mime_type = POSTResource::RequestContentType::MultipartFormData;
-        return {};
+        mime_type_directives.empend("boundary"sv, move(body_and_mime_type.boundary));
+        break;
     }
     case EncodingTypeAttributeState::PlainText: {
         // -> text/plain
@@ -715,12 +782,12 @@ ErrorOr<void> HTMLFormElement::submit_as_entity_body(AK::URL parsed_action, Vect
     }
 
     // 3. Plan to navigate to parsed action given a POST resource whose request body is body and request content-type is mimeType.
-    plan_to_navigate_to(parsed_action, POSTResource { .request_body = move(body), .request_content_type = mime_type }, target_navigable, history_handling, user_involvement);
+    plan_to_navigate_to(parsed_action, POSTResource { .request_body = move(body), .request_content_type = mime_type, .request_content_type_directives = move(mime_type_directives) }, target_navigable, history_handling, user_involvement);
     return {};
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#submit-get-action
-void HTMLFormElement::get_action_url(AK::URL parsed_action, JS::NonnullGCPtr<Navigable> target_navigable, Bindings::NavigationHistoryBehavior history_handling, UserNavigationInvolvement user_involvement)
+void HTMLFormElement::get_action_url(URL::URL parsed_action, JS::NonnullGCPtr<Navigable> target_navigable, Bindings::NavigationHistoryBehavior history_handling, UserNavigationInvolvement user_involvement)
 {
     // 1. Plan to navigate to parsed action.
     // Spec Note: entry list is discarded.
@@ -728,13 +795,13 @@ void HTMLFormElement::get_action_url(AK::URL parsed_action, JS::NonnullGCPtr<Nav
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#submit-mailto-headers
-ErrorOr<void> HTMLFormElement::mail_with_headers(AK::URL parsed_action, Vector<XHR::FormDataEntry> entry_list, [[maybe_unused]] String encoding, JS::NonnullGCPtr<Navigable> target_navigable, Bindings::NavigationHistoryBehavior history_handling, UserNavigationInvolvement user_involvement)
+ErrorOr<void> HTMLFormElement::mail_with_headers(URL::URL parsed_action, Vector<XHR::FormDataEntry> entry_list, [[maybe_unused]] String encoding, JS::NonnullGCPtr<Navigable> target_navigable, Bindings::NavigationHistoryBehavior history_handling, UserNavigationInvolvement user_involvement)
 {
     // 1. Let pairs be the result of converting to a list of name-value pairs with entry list.
     auto pairs = TRY(convert_to_list_of_name_value_pairs(entry_list));
 
     // 2. Let headers be the result of running the application/x-www-form-urlencoded serializer with pairs and encoding.
-    auto headers = TRY(url_encode(pairs, encoding));
+    auto headers = url_encode(pairs, encoding);
 
     // 3. Replace occurrences of U+002B PLUS SIGN characters (+) in headers with the string "%20".
     TRY(headers.replace("+"sv, "%20"sv, ReplaceMode::All));
@@ -747,7 +814,7 @@ ErrorOr<void> HTMLFormElement::mail_with_headers(AK::URL parsed_action, Vector<X
     return {};
 }
 
-ErrorOr<void> HTMLFormElement::mail_as_body(AK::URL parsed_action, Vector<XHR::FormDataEntry> entry_list, EncodingTypeAttributeState encoding_type, [[maybe_unused]] String encoding, JS::NonnullGCPtr<Navigable> target_navigable, Bindings::NavigationHistoryBehavior history_handling, UserNavigationInvolvement user_involvement)
+ErrorOr<void> HTMLFormElement::mail_as_body(URL::URL parsed_action, Vector<XHR::FormDataEntry> entry_list, EncodingTypeAttributeState encoding_type, [[maybe_unused]] String encoding, JS::NonnullGCPtr<Navigable> target_navigable, Bindings::NavigationHistoryBehavior history_handling, UserNavigationInvolvement user_involvement)
 {
     // 1. Let pairs be the result of converting to a list of name-value pairs with entry list.
     auto pairs = TRY(convert_to_list_of_name_value_pairs(entry_list));
@@ -764,14 +831,13 @@ ErrorOr<void> HTMLFormElement::mail_as_body(AK::URL parsed_action, Vector<XHR::F
         // 2. Set body to the result of running UTF-8 percent-encode on body using the default encode set. [URL]
         // NOTE: body is already UTF-8 encoded due to using AK::String, so we only have to do the percent encoding.
         // NOTE: "default encode set" links to "path percent-encode-set": https://url.spec.whatwg.org/#default-encode-set
-        auto percent_encoded_body = AK::URL::percent_encode(body, AK::URL::PercentEncodeSet::Path);
-        body = TRY(String::from_utf8(percent_encoded_body.view()));
+        body = URL::percent_encode(body, URL::PercentEncodeSet::Path);
         break;
     }
     default:
         // -> Otherwise
         // Let body be the result of running the application/x-www-form-urlencoded serializer with pairs and encoding.
-        body = TRY(url_encode(pairs, encoding));
+        body = url_encode(pairs, encoding);
         break;
     }
 
@@ -801,7 +867,7 @@ ErrorOr<void> HTMLFormElement::mail_as_body(AK::URL parsed_action, Vector<XHR::F
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#plan-to-navigate
-void HTMLFormElement::plan_to_navigate_to(AK::URL url, Variant<Empty, String, POSTResource> post_resource, JS::NonnullGCPtr<Navigable> target_navigable, Bindings::NavigationHistoryBehavior history_handling, UserNavigationInvolvement user_involvement)
+void HTMLFormElement::plan_to_navigate_to(URL::URL url, Variant<Empty, String, POSTResource> post_resource, JS::NonnullGCPtr<Navigable> target_navigable, Bindings::NavigationHistoryBehavior history_handling, UserNavigationInvolvement user_involvement)
 {
     // 1. Let referrerPolicy be the empty string.
     ReferrerPolicy::ReferrerPolicy referrer_policy = ReferrerPolicy::ReferrerPolicy::EmptyString;
@@ -823,7 +889,7 @@ void HTMLFormElement::plan_to_navigate_to(AK::URL url, Variant<Empty, String, PO
     // NOTE: `this`, `actual_resource` and `target_navigable` are protected by JS::SafeFunction.
     queue_an_element_task(Task::Source::DOMManipulation, [this, url, post_resource, target_navigable, history_handling, referrer_policy, user_involvement]() {
         // 1. Set the form's planned navigation to null.
-        m_planned_navigation = nullptr;
+        m_planned_navigation = {};
 
         // 2. Navigate targetNavigable to url using the form element's node document, with historyHandling set to historyHandling,
         //    referrerPolicy set to referrerPolicy, documentResource set to postResource, and cspNavigationType set to "form-submission".
@@ -842,19 +908,14 @@ void HTMLFormElement::plan_to_navigate_to(AK::URL url, Variant<Empty, String, PO
     VERIFY(m_planned_navigation);
 }
 
-// https://html.spec.whatwg.org/multipage/forms.html#the-form-element:supported-property-indices
-bool HTMLFormElement::is_supported_property_index(u32 index) const
-{
-    // The supported property indices at any instant are the indices supported by the object returned by the elements attribute at that instant.
-    return index < elements()->length();
-}
-
 // https://html.spec.whatwg.org/multipage/forms.html#dom-form-item
-WebIDL::ExceptionOr<JS::Value> HTMLFormElement::item_value(size_t index) const
+Optional<JS::Value> HTMLFormElement::item_value(size_t index) const
 {
     // To determine the value of an indexed property for a form element, the user agent must return the value returned by
     // the item method on the elements collection, when invoked with the given index as its argument.
-    return elements()->item(index);
+    if (auto value = elements()->item(index))
+        return value;
+    return {};
 }
 
 // https://html.spec.whatwg.org/multipage/forms.html#the-form-element:supported-property-names
@@ -872,7 +933,7 @@ Vector<FlyString> HTMLFormElement::supported_property_names() const
             Name,
             Past,
         } source;
-        Duration age;
+        AK::Duration age;
     };
     Vector<SourcedName> sourced_names;
 
@@ -951,7 +1012,7 @@ Vector<FlyString> HTMLFormElement::supported_property_names() const
 }
 
 // https://html.spec.whatwg.org/multipage/forms.html#dom-form-nameditem
-WebIDL::ExceptionOr<JS::Value> HTMLFormElement::named_item_value(FlyString const& name) const
+JS::Value HTMLFormElement::named_item_value(FlyString const& name) const
 {
     auto& realm = this->realm();
     auto& root = verify_cast<ParentNode>(this->root());
@@ -961,7 +1022,7 @@ WebIDL::ExceptionOr<JS::Value> HTMLFormElement::named_item_value(FlyString const
     // 1. Let candidates be a live RadioNodeList object containing all the listed elements, whose form owner is the form
     //    element, that have either an id attribute or a name attribute equal to name, with the exception of input
     //    elements whose type attribute is in the Image Button state, in tree order.
-    auto candidates = DOM::RadioNodeList::create(realm, root, DOM::LiveNodeList::Scope::Descendants, [this, name](auto& node) -> bool {
+    auto candidates = RadioNodeList::create(realm, root, DOM::LiveNodeList::Scope::Descendants, [this, name](auto& node) -> bool {
         if (!is<DOM::Element>(node))
             return false;
         auto const& element = static_cast<DOM::Element const&>(node);
@@ -978,7 +1039,7 @@ WebIDL::ExceptionOr<JS::Value> HTMLFormElement::named_item_value(FlyString const
     //    whose form owner is the form element, that have either an id attribute or a name attribute equal to name,
     //    in tree order.
     if (candidates->length() == 0) {
-        candidates = DOM::RadioNodeList::create(realm, root, DOM::LiveNodeList::Scope::Descendants, [this, name](auto& node) -> bool {
+        candidates = RadioNodeList::create(realm, root, DOM::LiveNodeList::Scope::Descendants, [this, name](auto& node) -> bool {
             if (!is<HTMLImageElement>(node))
                 return false;
 
@@ -1010,6 +1071,68 @@ WebIDL::ExceptionOr<JS::Value> HTMLFormElement::named_item_value(FlyString const
 
     // 6. Return the node in candidates.
     return node;
+}
+
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#default-button
+FormAssociatedElement* HTMLFormElement::default_button()
+{
+    // A form element's default button is the first submit button in tree order whose form owner is that form element.
+    FormAssociatedElement* default_button = nullptr;
+
+    root().for_each_in_subtree([&](auto& node) {
+        auto* form_associated_element = dynamic_cast<FormAssociatedElement*>(&node);
+        if (!form_associated_element)
+            return TraversalDecision::Continue;
+
+        if (form_associated_element->form() == this && form_associated_element->is_submit_button()) {
+            default_button = form_associated_element;
+            return TraversalDecision::Break;
+        }
+
+        return TraversalDecision::Continue;
+    });
+
+    return default_button;
+}
+
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#field-that-blocks-implicit-submission
+size_t HTMLFormElement::number_of_fields_blocking_implicit_submission() const
+{
+    // For the purpose of the previous paragraph, an element is a field that blocks implicit submission of a form
+    // element if it is an input element whose form owner is that form element and whose type attribute is in one of
+    // the following states: Text, Search, Telephone, URL, Email, Password, Date, Month, Week, Time,
+    // Local Date and Time, Number.
+    size_t count = 0;
+
+    for (auto element : m_associated_elements) {
+        if (!is<HTMLInputElement>(*element))
+            continue;
+
+        auto const& input = static_cast<HTMLInputElement&>(*element);
+        using enum HTMLInputElement::TypeAttributeState;
+
+        switch (input.type_state()) {
+        case Text:
+        case Search:
+        case Telephone:
+        case URL:
+        case Email:
+        case Password:
+        case Date:
+        case Month:
+        case Week:
+        case Time:
+        case LocalDateAndTime:
+        case Number:
+            ++count;
+            break;
+
+        default:
+            break;
+        }
+    };
+
+    return count;
 }
 
 }

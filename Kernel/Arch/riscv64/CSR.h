@@ -8,6 +8,7 @@
 
 #include <AK/BitCast.h>
 #include <AK/Format.h>
+#include <AK/StdLibExtras.h>
 #include <AK/Types.h>
 
 #include <AK/Platform.h>
@@ -29,6 +30,7 @@ enum class Address : u16 {
     SATP = 0x180,
 
     // Unprivileged Counters/Timers
+    CYCLE = 0xc00,
     TIME = 0xc01,
 };
 
@@ -71,7 +73,7 @@ struct [[gnu::packed]] alignas(u64) SATP {
         Bare = 0,
         Sv39 = 8,
         Sv48 = 9,
-        Sv67 = 10,
+        Sv57 = 10,
     };
 
     // Physical page number of root page table
@@ -91,6 +93,11 @@ struct [[gnu::packed]] alignas(u64) SATP {
     static ALWAYS_INLINE SATP read()
     {
         return bit_cast<SATP>(CSR::read(CSR::Address::SATP));
+    }
+
+    bool operator==(SATP const& other) const
+    {
+        return bit_cast<u64>(*this) == bit_cast<u64>(other);
     }
 };
 static_assert(AssertSize<SATP, 8>());

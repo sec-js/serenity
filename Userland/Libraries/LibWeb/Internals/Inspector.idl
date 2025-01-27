@@ -8,10 +8,14 @@
     undefined setDOMNodeText(long nodeID, DOMString text);
     undefined setDOMNodeTag(long nodeID, DOMString tag);
     undefined addDOMNodeAttributes(long nodeID, NamedNodeMap attributes);
-    undefined replaceDOMNodeAttribute(long nodeID, DOMString name, NamedNodeMap replacementAttributes);
+    undefined replaceDOMNodeAttribute(long nodeID, unsigned long long attributeIndex, NamedNodeMap replacementAttributes);
 
-    undefined requestDOMTreeContextMenu(long nodeID, long clientX, long clientY, DOMString type, DOMString? tag, DOMString? attributeName, DOMString? attributeValue);
+    undefined requestDOMTreeContextMenu(long nodeID, long clientX, long clientY, DOMString type, DOMString? tag, unsigned long long? attributeIndex);
+
+    undefined requestStyleSheetSource(DOMString type, long? domNodeID, DOMString? url);
 
     undefined executeConsoleScript(DOMString script);
+
+    undefined exportInspectorHTML(DOMString html);
 
 };

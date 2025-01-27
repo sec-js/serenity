@@ -15,7 +15,9 @@
 #include <LibJS/Runtime/FunctionObject.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/Iterator.h>
+#include <LibJS/Runtime/KeyedCollections.h>
 #include <LibJS/Runtime/PrivateEnvironment.h>
+#include <LibJS/Runtime/VM.h>
 #include <LibJS/Runtime/Value.h>
 
 namespace JS {
@@ -66,10 +68,7 @@ enum class CallerMode {
     Strict,
     NonStrict
 };
-enum class EvalMode {
-    Direct,
-    Indirect
-};
+
 ThrowCompletionOr<Value> perform_eval(VM&, Value, CallerMode, EvalMode);
 
 ThrowCompletionOr<void> eval_declaration_instantiation(VM& vm, Program const& program, Environment* variable_environment, Environment* lexical_environment, PrivateEnvironment* private_environment, bool strict);
@@ -241,17 +240,17 @@ ThrowCompletionOr<GroupsType> group_by(VM& vm, Value items, Value callback_funct
             return iterator_close(vm, iterator_record, move(error));
         }
 
-        // b. Let next be ? IteratorStep(iteratorRecord).
-        auto next = TRY(iterator_step(vm, iterator_record));
+        // b. Let next be ? IteratorStepValue(iteratorRecord).
+        auto next = TRY(iterator_step_value(vm, iterator_record));
 
-        // c. If next is false, then
-        if (!next) {
+        // c. If next is DONE, then
+        if (!next.has_value()) {
             // i. Return groups.
             return ThrowCompletionOr<GroupsType> { move(groups) };
         }
 
-        // d. Let value be ? IteratorValue(next).
-        auto value = TRY(iterator_value(vm, *next));
+        // d. Let value be next.
+        auto value = next.release_value();
 
         // e. Let key be Completion(Call(callbackfn, undefined, « value, 𝔽(k) »)).
         auto key = call(vm, callback_function, js_undefined(), value, Value(k));
@@ -276,9 +275,8 @@ ThrowCompletionOr<GroupsType> group_by(VM& vm, Value items, Value callback_funct
             // i. Assert: keyCoercion is zero.
             static_assert(IsSame<KeyType, void>);
 
-            // ii. If key is -0𝔽, set key to +0𝔽.
-            if (key.value().is_negative_zero())
-                key = Value(0);
+            // ii. Set key to CanonicalizeKeyedCollectionKey(key).
+            key = canonicalize_keyed_collection_key(key.value());
 
             add_value_to_keyed_group(vm, groups, make_handle(key.release_value()), value);
         }
@@ -314,6 +312,27 @@ auto modulo(Crypto::BigInteger auto const& x, Crypto::BigInteger auto const& y)
     if (result.is_negative())
         result = result.plus(y);
     return result;
+}
+
+// remainder(x, y), https://tc39.es/proposal-temporal/#eqn-remainder
+template<Arithmetic T, Arithmetic U>
+auto remainder(T x, U y)
+{
+    // The mathematical function remainder(x, y) produces the mathematical value whose sign is the sign of x and whose magnitude is abs(x) modulo y.
+    VERIFY(y != 0);
+    if constexpr (IsFloatingPoint<T> || IsFloatingPoint<U>) {
+        if constexpr (IsFloatingPoint<U>)
+            VERIFY(isfinite(y));
+        return fmod(x, y);
+    } else {
+        return x % y;
+    }
+}
+
+auto remainder(Crypto::BigInteger auto const& x, Crypto::BigInteger auto const& y)
+{
+    VERIFY(!y.is_zero());
+    return x.divided_by(y).remainder;
 }
 
 }

@@ -27,7 +27,7 @@ public:
     virtual void flip(Gfx::Orientation) = 0;
     virtual void rotate(Gfx::RotationDirection) = 0;
 
-    virtual void draw_into(Gfx::Painter&, Gfx::IntRect const& dest, Gfx::Painter::ScalingMode) const = 0;
+    virtual void draw_into(Gfx::Painter&, Gfx::IntRect const& dest, Gfx::ScalingMode) const = 0;
 
     virtual ErrorOr<NonnullRefPtr<Gfx::Bitmap>> bitmap(Optional<Gfx::IntSize> ideal_size) const = 0;
 
@@ -43,7 +43,7 @@ public:
     virtual void flip(Gfx::Orientation) override;
     virtual void rotate(Gfx::RotationDirection) override;
 
-    virtual void draw_into(Gfx::Painter&, Gfx::IntRect const& dest, Gfx::Painter::ScalingMode) const override;
+    virtual void draw_into(Gfx::Painter&, Gfx::IntRect const& dest, Gfx::ScalingMode) const override;
 
     virtual ErrorOr<NonnullRefPtr<Gfx::Bitmap>> bitmap(Optional<Gfx::IntSize> ideal_size) const override;
 
@@ -66,14 +66,14 @@ private:
 
 class BitmapImage final : public Image {
 public:
-    static NonnullRefPtr<BitmapImage> create(Gfx::Bitmap& bitmap) { return adopt_ref(*new BitmapImage(bitmap)); }
+    static NonnullRefPtr<BitmapImage> create(Gfx::Bitmap& bitmap, Gfx::FloatPoint scale) { return adopt_ref(*new BitmapImage(bitmap, scale)); }
 
-    virtual Gfx::IntSize size() const override { return m_bitmap->size(); }
+    virtual Gfx::IntSize size() const override { return { round(m_bitmap->size().width() * m_scale.x()), round(m_bitmap->size().height() * m_scale.y()) }; }
 
     virtual void flip(Gfx::Orientation) override;
     virtual void rotate(Gfx::RotationDirection) override;
 
-    virtual void draw_into(Gfx::Painter&, Gfx::IntRect const& dest, Gfx::Painter::ScalingMode) const override;
+    virtual void draw_into(Gfx::Painter&, Gfx::IntRect const& dest, Gfx::ScalingMode) const override;
 
     virtual ErrorOr<NonnullRefPtr<Gfx::Bitmap>> bitmap(Optional<Gfx::IntSize>) const override
     {
@@ -81,12 +81,14 @@ public:
     }
 
 private:
-    BitmapImage(Gfx::Bitmap& bitmap)
+    BitmapImage(Gfx::Bitmap& bitmap, Gfx::FloatPoint scale)
         : m_bitmap(bitmap)
+        , m_scale(scale)
     {
     }
 
     NonnullRefPtr<Gfx::Bitmap> m_bitmap;
+    Gfx::FloatPoint m_scale;
 };
 
 class ViewWidget final : public GUI::AbstractZoomPanWidget {
@@ -110,7 +112,7 @@ public:
     void set_path(String const& path);
     void resize_window();
     void scale_image_for_window();
-    void set_scaling_mode(Gfx::Painter::ScalingMode);
+    void set_scaling_mode(Gfx::ScalingMode);
 
     bool is_next_available() const;
     bool is_previous_available() const;
@@ -164,7 +166,7 @@ private:
     bool m_scaled_for_first_image { false };
     Vector<ByteString> m_files_in_same_dir;
     Optional<size_t> m_current_index;
-    Gfx::Painter::ScalingMode m_scaling_mode { Gfx::Painter::ScalingMode::NearestNeighbor };
+    Gfx::ScalingMode m_scaling_mode { Gfx::ScalingMode::BoxSampling };
 };
 
 }

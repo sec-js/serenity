@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <AK/NonnullOwnPtr.h>
+#include <AK/RedBlackTree.h>
 #include <AK/Result.h>
 #include <AK/String.h>
 #include <AK/StringView.h>
@@ -188,8 +190,6 @@ public:
             ++m_index;
         size_t length = m_index - start;
 
-        if (length == 0)
-            return {};
         return m_input.substring_view(start, length);
     }
 
@@ -202,8 +202,6 @@ public:
             ++m_index;
         size_t length = m_index - start;
 
-        if (length == 0)
-            return {};
         return m_input.substring_view(start, length);
     }
 
@@ -224,15 +222,49 @@ public:
     }
 
 protected:
-    StringView m_input;
-    size_t m_index { 0 };
-
-private:
 #ifndef KERNEL
     Result<u32, UnicodeEscapeError> decode_code_point();
-    Result<u32, UnicodeEscapeError> decode_single_or_paired_surrogate(bool combine_surrogate_pairs);
+    Result<u32, UnicodeEscapeError> decode_single_or_paired_surrogate(bool combine_surrogate_pairs = true);
 #endif
+
+    StringView m_input;
+    size_t m_index { 0 };
 };
+
+#if !defined(KERNEL)
+class LineTrackingLexer : public GenericLexer {
+public:
+    struct Position {
+        size_t offset { 0 };
+        size_t line { 0 };
+        size_t column { 0 };
+    };
+
+    LineTrackingLexer(StringView input, Position start_position)
+        : GenericLexer(input)
+        , m_first_line_start_position(start_position)
+        , m_line_start_positions(make<RedBlackTree<size_t, size_t>>())
+    {
+        m_line_start_positions->insert(0, 0);
+        auto first_newline = input.find('\n').map([](auto x) { return x + 1; }).value_or(input.length());
+        m_line_start_positions->insert(first_newline, 1);
+        m_largest_known_line_start_position = first_newline;
+    }
+
+    LineTrackingLexer(StringView input)
+        : LineTrackingLexer(input, { 0, 1, 1 })
+    {
+    }
+
+    Position position_for(size_t) const;
+    Position current_position() const { return position_for(m_index); }
+
+protected:
+    Position m_first_line_start_position;
+    mutable NonnullOwnPtr<RedBlackTree<size_t, size_t>> m_line_start_positions; // offset -> line index
+    mutable size_t m_largest_known_line_start_position { 0 };
+};
+#endif
 
 constexpr auto is_any_of(StringView values)
 {
@@ -254,4 +286,7 @@ using AK::GenericLexer;
 using AK::is_any_of;
 using AK::is_path_separator;
 using AK::is_quote;
+#    if !defined(KERNEL)
+using AK::LineTrackingLexer;
+#    endif
 #endif

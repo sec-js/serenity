@@ -2,13 +2,14 @@ include(${SerenityOS_SOURCE_DIR}/Meta/CMake/public_suffix.cmake)
 
 set(SOURCES
     Attribute.cpp
+    ChromeProcess.cpp
     CookieJar.cpp
     Database.cpp
-    History.cpp
     InspectorClient.cpp
+    ProcessHandle.cpp
+    ProcessManager.cpp
     RequestServerAdapter.cpp
     SearchEngine.cpp
-    SocketPair.cpp
     SourceHighlighter.cpp
     URL.cpp
     UserAgent.cpp
@@ -24,7 +25,7 @@ if (SERENITYOS)
     list(APPEND SOURCES OutOfProcessWebView.cpp)
 endif()
 
-embed_as_string_view(
+embed_as_string(
     "NativeStyleSheetSource.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Native.css"
     "NativeStyleSheetSource.cpp"
@@ -32,20 +33,24 @@ embed_as_string_view(
     NAMESPACE "WebView"
 )
 
+compile_ipc(UIProcessServer.ipc UIProcessServerEndpoint.h)
+compile_ipc(UIProcessClient.ipc UIProcessClientEndpoint.h)
+
 set(GENERATED_SOURCES
+    ${GENERATED_SOURCES}
     ../../Services/RequestServer/RequestClientEndpoint.h
     ../../Services/RequestServer/RequestServerEndpoint.h
     ../../Services/WebContent/WebContentClientEndpoint.h
     ../../Services/WebContent/WebContentServerEndpoint.h
     ../../Services/WebContent/WebDriverClientEndpoint.h
     ../../Services/WebContent/WebDriverServerEndpoint.h
-    ../../Services/WebSocket/WebSocketClientEndpoint.h
-    ../../Services/WebSocket/WebSocketServerEndpoint.h
     NativeStyleSheetSource.cpp
+    UIProcessClientEndpoint.h
+    UIProcessServerEndpoint.h
 )
 
 serenity_lib(LibWebView webview)
-target_link_libraries(LibWebView PRIVATE LibCore LibFileSystem LibGfx LibIPC LibProtocol LibJS LibWeb LibSQL LibUnicode)
+target_link_libraries(LibWebView PRIVATE LibCore LibFileSystem LibGfx LibIPC LibProtocol LibJS LibWeb LibSQL LibUnicode LibURL LibSyntax)
 target_compile_definitions(LibWebView PRIVATE ENABLE_PUBLIC_SUFFIX=$<BOOL:${ENABLE_PUBLIC_SUFFIX_DOWNLOAD}>)
 
 if (SERENITYOS)

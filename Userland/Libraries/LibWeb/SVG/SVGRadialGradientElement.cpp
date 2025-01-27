@@ -5,6 +5,8 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/SVGRadialGradientElementPrototype.h>
+#include <LibWeb/Painting/PaintStyle.h>
 #include <LibWeb/SVG/AttributeNames.h>
 #include <LibWeb/SVG/SVGRadialGradientElement.h>
 
@@ -20,12 +22,12 @@ SVGRadialGradientElement::SVGRadialGradientElement(DOM::Document& document, DOM:
 void SVGRadialGradientElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::SVGRadialGradientElementPrototype>(realm, "SVGRadialGradientElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(SVGRadialGradientElement);
 }
 
-void SVGRadialGradientElement::attribute_changed(FlyString const& name, Optional<String> const& value)
+void SVGRadialGradientElement::attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value)
 {
-    SVGGradientElement::attribute_changed(name, value);
+    SVGGradientElement::attribute_changed(name, old_value, value);
 
     // FIXME: These are <length> or <coordinate> in the spec, but all examples seem to allow percentages
     // and unitless values.
@@ -53,12 +55,18 @@ void SVGRadialGradientElement::attribute_changed(FlyString const& name, Optional
 // https://svgwg.org/svg2-draft/pservers.html#RadialGradientElementFXAttribute
 NumberPercentage SVGRadialGradientElement::start_circle_x() const
 {
+    HashTable<SVGGradientElement const*> seen_gradients;
+    return start_circle_x_impl(seen_gradients);
+}
+
+NumberPercentage SVGRadialGradientElement::start_circle_x_impl(HashTable<SVGGradientElement const*>& seen_gradients) const
+{
     if (m_fx.has_value())
         return *m_fx;
     // If the element references an element that specifies a value for 'fx', then the value of 'fx' is
     // inherited from the referenced element.
-    if (auto gradient = linked_radial_gradient())
-        return gradient->start_circle_x();
+    if (auto gradient = linked_radial_gradient(seen_gradients))
+        return gradient->start_circle_x_impl(seen_gradients);
     // If attribute ‘fx’ is not specified, ‘fx’ will coincide with the presentational value of ‘cx’ for
     // the element whether the value for 'cx' was inherited or not.
     return end_circle_x();
@@ -67,12 +75,18 @@ NumberPercentage SVGRadialGradientElement::start_circle_x() const
 // https://svgwg.org/svg2-draft/pservers.html#RadialGradientElementFYAttribute
 NumberPercentage SVGRadialGradientElement::start_circle_y() const
 {
+    HashTable<SVGGradientElement const*> seen_gradients;
+    return start_circle_y_impl(seen_gradients);
+}
+
+NumberPercentage SVGRadialGradientElement::start_circle_y_impl(HashTable<SVGGradientElement const*>& seen_gradients) const
+{
     if (m_fy.has_value())
         return *m_fy;
     // If the element references an element that specifies a value for 'fy', then the value of 'fy' is
     // inherited from the referenced element.
-    if (auto gradient = linked_radial_gradient())
-        return gradient->start_circle_y();
+    if (auto gradient = linked_radial_gradient(seen_gradients))
+        return gradient->start_circle_y_impl(seen_gradients);
     // If attribute ‘fy’ is not specified, ‘fy’ will coincide with the presentational value of ‘cy’ for
     // the element whether the value for 'cy' was inherited or not.
     return end_circle_y();
@@ -81,13 +95,19 @@ NumberPercentage SVGRadialGradientElement::start_circle_y() const
 // https://svgwg.org/svg2-draft/pservers.html#RadialGradientElementFRAttribute
 NumberPercentage SVGRadialGradientElement::start_circle_radius() const
 {
+    HashTable<SVGGradientElement const*> seen_gradients;
+    return start_circle_radius_impl(seen_gradients);
+}
+
+NumberPercentage SVGRadialGradientElement::start_circle_radius_impl(HashTable<SVGGradientElement const*>& seen_gradients) const
+{
     // Note: A negative value is an error.
     if (m_fr.has_value() && m_fr->value() >= 0)
         return *m_fr;
     // if the element references an element that specifies a value for 'fr', then the value of
     // 'fr' is inherited from the referenced element.
-    if (auto gradient = linked_radial_gradient())
-        return gradient->start_circle_radius();
+    if (auto gradient = linked_radial_gradient(seen_gradients))
+        return gradient->start_circle_radius_impl(seen_gradients);
     // If the attribute is not specified, the effect is as if a value of '0%' were specified.
     return NumberPercentage::create_percentage(0);
 }
@@ -95,35 +115,53 @@ NumberPercentage SVGRadialGradientElement::start_circle_radius() const
 // https://svgwg.org/svg2-draft/pservers.html#RadialGradientElementCXAttribute
 NumberPercentage SVGRadialGradientElement::end_circle_x() const
 {
+    HashTable<SVGGradientElement const*> seen_gradients;
+    return end_circle_x_impl(seen_gradients);
+}
+
+NumberPercentage SVGRadialGradientElement::end_circle_x_impl(HashTable<SVGGradientElement const*>& seen_gradients) const
+{
     if (m_cx.has_value())
         return *m_cx;
-    if (auto gradient = linked_radial_gradient())
-        return gradient->end_circle_x();
+    if (auto gradient = linked_radial_gradient(seen_gradients))
+        return gradient->end_circle_x_impl(seen_gradients);
     return NumberPercentage::create_percentage(50);
 }
 
 // https://svgwg.org/svg2-draft/pservers.html#RadialGradientElementCYAttribute
 NumberPercentage SVGRadialGradientElement::end_circle_y() const
 {
+    HashTable<SVGGradientElement const*> seen_gradients;
+    return end_circle_y_impl(seen_gradients);
+}
+
+NumberPercentage SVGRadialGradientElement::end_circle_y_impl(HashTable<SVGGradientElement const*>& seen_gradients) const
+{
     if (m_cy.has_value())
         return *m_cy;
-    if (auto gradient = linked_radial_gradient())
-        return gradient->end_circle_y();
+    if (auto gradient = linked_radial_gradient(seen_gradients))
+        return gradient->end_circle_y_impl(seen_gradients);
     return NumberPercentage::create_percentage(50);
 }
 
 // https://svgwg.org/svg2-draft/pservers.html#RadialGradientElementRAttribute
 NumberPercentage SVGRadialGradientElement::end_circle_radius() const
 {
+    HashTable<SVGGradientElement const*> seen_gradients;
+    return end_circle_radius_impl(seen_gradients);
+}
+
+NumberPercentage SVGRadialGradientElement::end_circle_radius_impl(HashTable<SVGGradientElement const*>& seen_gradients) const
+{
     // Note: A negative value is an error.
     if (m_r.has_value() && m_r->value() >= 0)
         return *m_r;
-    if (auto gradient = linked_radial_gradient())
-        return gradient->end_circle_radius();
+    if (auto gradient = linked_radial_gradient(seen_gradients))
+        return gradient->end_circle_radius_impl(seen_gradients);
     return NumberPercentage::create_percentage(50);
 }
 
-Optional<Gfx::PaintStyle const&> SVGRadialGradientElement::to_gfx_paint_style(SVGPaintContext const& paint_context) const
+Optional<Painting::PaintStyle> SVGRadialGradientElement::to_gfx_paint_style(SVGPaintContext const& paint_context) const
 {
     auto units = gradient_units();
     Gfx::FloatPoint start_center;
@@ -163,8 +201,7 @@ Optional<Gfx::PaintStyle const&> SVGRadialGradientElement::to_gfx_paint_style(SV
     }
 
     if (!m_paint_style) {
-        m_paint_style = Gfx::SVGRadialGradientPaintStyle::create(start_center, start_radius, end_center, end_radius)
-                            .release_value_but_fixme_should_propagate_errors();
+        m_paint_style = Painting::SVGRadialGradientPaintStyle::create(start_center, start_radius, end_center, end_radius);
         // FIXME: Update stops in DOM changes:
         add_color_stops(*m_paint_style);
     } else {
@@ -174,38 +211,44 @@ Optional<Gfx::PaintStyle const&> SVGRadialGradientElement::to_gfx_paint_style(SV
         m_paint_style->set_end_radius(end_radius);
     }
     m_paint_style->set_gradient_transform(gradient_paint_transform(paint_context));
-    m_paint_style->set_spread_method(to_gfx_spread_method(spread_method()));
+    m_paint_style->set_spread_method(to_painting_spread_method(spread_method()));
     return *m_paint_style;
 }
 
 JS::NonnullGCPtr<SVGAnimatedLength> SVGRadialGradientElement::cx() const
 {
-    TODO();
+    // FIXME: Implement this properly.
+    return SVGAnimatedLength::create(realm(), SVGLength::create(realm(), 0, 0), SVGLength::create(realm(), 0, 0));
 }
 
 JS::NonnullGCPtr<SVGAnimatedLength> SVGRadialGradientElement::cy() const
 {
-    TODO();
+    // FIXME: Implement this properly.
+    return SVGAnimatedLength::create(realm(), SVGLength::create(realm(), 0, 0), SVGLength::create(realm(), 0, 0));
 }
 
 JS::NonnullGCPtr<SVGAnimatedLength> SVGRadialGradientElement::fx() const
 {
-    TODO();
+    // FIXME: Implement this properly.
+    return SVGAnimatedLength::create(realm(), SVGLength::create(realm(), 0, 0), SVGLength::create(realm(), 0, 0));
 }
 
 JS::NonnullGCPtr<SVGAnimatedLength> SVGRadialGradientElement::fy() const
 {
-    TODO();
+    // FIXME: Implement this properly.
+    return SVGAnimatedLength::create(realm(), SVGLength::create(realm(), 0, 0), SVGLength::create(realm(), 0, 0));
 }
 
 JS::NonnullGCPtr<SVGAnimatedLength> SVGRadialGradientElement::fr() const
 {
-    TODO();
+    // FIXME: Implement this properly.
+    return SVGAnimatedLength::create(realm(), SVGLength::create(realm(), 0, 0), SVGLength::create(realm(), 0, 0));
 }
 
 JS::NonnullGCPtr<SVGAnimatedLength> SVGRadialGradientElement::r() const
 {
-    TODO();
+    // FIXME: Implement this properly.
+    return SVGAnimatedLength::create(realm(), SVGLength::create(realm(), 0, 0), SVGLength::create(realm(), 0, 0));
 }
 
 }

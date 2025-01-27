@@ -10,6 +10,7 @@
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
 #include <AK/Vector.h>
+#include <LibCrypto/BigFraction/BigFraction.h>
 
 #include "Forward.h"
 
@@ -133,7 +134,12 @@ protected:
 class WellKnownNode : public Expression {
 public:
     enum Type {
-        ZeroArgumentFunctionCall,
+        False,
+        NewTarget,
+        Null,
+        This,
+        True,
+        Undefined,
         // Update WellKnownNode::dump_tree after adding an entry here
     };
 
@@ -150,7 +156,6 @@ private:
 };
 
 inline Tree const error_tree = make_ref_counted<ErrorNode>();
-inline Tree const zero_argument_function_call = make_ref_counted<WellKnownNode>(WellKnownNode::ZeroArgumentFunctionCall);
 
 class ControlFlowFunctionReturn : public ControlFlowOperator {
 public:
@@ -208,16 +213,16 @@ protected:
 
 class MathematicalConstant : public Expression {
 public:
-    MathematicalConstant(i64 number)
+    MathematicalConstant(Crypto::BigFraction number)
         : m_number(number)
     {
     }
 
-    // TODO: This should be able to hold arbitrary number
-    i64 m_number;
-
 protected:
     void dump_tree(StringBuilder& builder) override;
+
+private:
+    Crypto::BigFraction m_number;
 };
 
 class StringLiteral : public Expression {
@@ -235,25 +240,26 @@ protected:
 
 #define ENUMERATE_UNARY_OPERATORS(F) \
     F(Invalid)                       \
+    F(AssertCompletion)              \
     F(Minus)                         \
-    F(AssertCompletion)
+    F(ReturnIfAbrubt)
 
 #define ENUMERATE_BINARY_OPERATORS(F) \
     F(Invalid)                        \
-    F(CompareLess)                    \
-    F(CompareGreater)                 \
-    F(CompareNotEqual)                \
-    F(CompareEqual)                   \
+    F(ArraySubscript)                 \
     F(Assignment)                     \
+    F(Comma)                          \
+    F(CompareEqual)                   \
+    F(CompareGreater)                 \
+    F(CompareLess)                    \
+    F(CompareNotEqual)                \
     F(Declaration)                    \
-    F(Plus)                           \
+    F(Division)                       \
+    F(MemberAccess)                   \
     F(Minus)                          \
     F(Multiplication)                 \
-    F(Division)                       \
-    F(Comma)                          \
-    F(MemberAccess)                   \
-    F(FunctionCall)                   \
-    F(ArraySubscript)
+    F(Plus)                           \
+    F(Power)
 
 #define NAME(name) name,
 #define STRINGIFY(name) #name##sv,
@@ -515,6 +521,20 @@ protected:
     void dump_tree(StringBuilder& builder) override;
 };
 
+class Enumerator : public Expression {
+public:
+    Enumerator(Badge<TranslationUnit>, StringView value)
+        : m_value(value)
+    {
+    }
+
+protected:
+    void dump_tree(StringBuilder& builder) override;
+
+private:
+    StringView m_value;
+};
+
 class FunctionPointer : public Expression {
 public:
     FunctionPointer(FunctionDeclarationRef declaration)
@@ -526,6 +546,22 @@ public:
 
 protected:
     void dump_tree(StringBuilder& builder) override;
+};
+
+class List : public Expression {
+public:
+    List(Vector<Tree>&& elements)
+        : m_elements(elements)
+    {
+    }
+
+    Vector<NodeSubtreePointer> subtrees() override;
+
+protected:
+    void dump_tree(StringBuilder& builder) override;
+
+private:
+    Vector<Tree> m_elements;
 };
 
 }

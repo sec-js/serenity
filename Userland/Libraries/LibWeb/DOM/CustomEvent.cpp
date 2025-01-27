@@ -6,6 +6,7 @@
  */
 
 #include <LibJS/Runtime/Realm.h>
+#include <LibWeb/Bindings/CustomEventPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/DOM/CustomEvent.h>
 
@@ -34,7 +35,7 @@ CustomEvent::~CustomEvent() = default;
 void CustomEvent::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::CustomEventPrototype>(realm, "CustomEvent"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(CustomEvent);
 }
 
 void CustomEvent::visit_edges(JS::Cell::Visitor& visitor)

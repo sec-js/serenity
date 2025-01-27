@@ -32,7 +32,7 @@ public:
     }
 
     template<typename U>
-    explicit constexpr Size(Size<U> const& other)
+    requires(IsConstructible<T, U>) explicit constexpr Size(Size<U> const& other)
         : m_width(other.width())
         , m_height(other.height())
     {
@@ -220,3 +220,12 @@ template<>
 ErrorOr<Gfx::IntSize> decode(Decoder&);
 
 }
+
+template<typename T>
+struct AK::Traits<Gfx::Size<T>> : public AK::DefaultTraits<Gfx::Size<T>> {
+    static constexpr bool is_trivial() { return false; }
+    static unsigned hash(Gfx::Size<T> const& size)
+    {
+        return pair_int_hash(AK::Traits<T>::hash(size.width()), AK::Traits<T>::hash(size.height()));
+    }
+};

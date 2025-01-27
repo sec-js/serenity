@@ -70,11 +70,6 @@ ErrorOr<void> ISO9660Inode::traverse_as_directory(Function<ErrorOr<void>(FileSys
     });
 }
 
-ErrorOr<void> ISO9660Inode::replace_child(StringView, Inode&)
-{
-    return EROFS;
-}
-
 ErrorOr<NonnullRefPtr<Inode>> ISO9660Inode::lookup(StringView name)
 {
     RefPtr<Inode> inode;
@@ -140,7 +135,7 @@ ErrorOr<void> ISO9660Inode::chown(UserID, GroupID)
     return EROFS;
 }
 
-ErrorOr<void> ISO9660Inode::truncate(u64)
+ErrorOr<void> ISO9660Inode::truncate_locked(u64)
 {
     return EROFS;
 }

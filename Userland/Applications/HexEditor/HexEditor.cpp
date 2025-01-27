@@ -34,6 +34,15 @@
 
 namespace HexEditor {
 
+HexEditor::OffsetFormat HexEditor::offset_format_from_string(StringView string)
+{
+    if (string.equals_ignoring_ascii_case("decimal"sv)) {
+        return OffsetFormat::Decimal;
+    }
+    // Default to hex if invalid
+    return OffsetFormat::Hexadecimal;
+}
+
 HexEditor::HexEditor()
     : m_document(make<HexDocumentMemory>(ByteBuffer::create_zeroed(0).release_value_but_fixme_should_propagate_errors()))
 {
@@ -232,13 +241,53 @@ bool HexEditor::copy_selected_hex_to_clipboard_as_c_code()
     return true;
 }
 
+void HexEditor::update_content_size()
+{
+    auto new_width = offset_area_width() + hex_area_width() + text_area_width();
+    auto new_height = total_rows() * line_height() + 2 * m_padding;
+    set_content_size({ static_cast<int>(new_width), static_cast<int>(new_height) });
+    update();
+}
+
+void HexEditor::set_show_offsets_column(bool value)
+{
+    if (value == m_show_offsets_column)
+        return;
+
+    m_show_offsets_column = value;
+    update_content_size();
+}
+
+void HexEditor::set_offset_format(OffsetFormat format)
+{
+    if (format == m_offset_format)
+        return;
+
+    m_offset_format = format;
+    update_content_size();
+}
+
 void HexEditor::set_bytes_per_row(size_t bytes_per_row)
 {
-    m_bytes_per_row = bytes_per_row;
-    auto newWidth = offset_margin_width() + (m_bytes_per_row * cell_width()) + 2 * m_padding + (m_bytes_per_row * character_width()) + 4 * m_padding;
-    auto newHeight = total_rows() * line_height() + 2 * m_padding;
-    set_content_size({ static_cast<int>(newWidth), static_cast<int>(newHeight) });
-    update();
+    if (bytes_per_row == this->bytes_per_row())
+        return;
+    set_groups_per_row(ceil_div(bytes_per_row, m_bytes_per_group));
+}
+
+void HexEditor::set_bytes_per_group(size_t bytes_per_group)
+{
+    if (bytes_per_group == m_bytes_per_group)
+        return;
+    m_bytes_per_group = bytes_per_group;
+    update_content_size();
+}
+
+void HexEditor::set_groups_per_row(size_t groups_per_row)
+{
+    if (groups_per_row == m_groups_per_row)
+        return;
+    m_groups_per_row = groups_per_row;
+    update_content_size();
 }
 
 void HexEditor::set_content_length(size_t length)
@@ -246,9 +295,7 @@ void HexEditor::set_content_length(size_t length)
     if (length == m_content_length)
         return;
     m_content_length = length;
-    auto newWidth = offset_margin_width() + (m_bytes_per_row * cell_width()) + 2 * m_padding + (m_bytes_per_row * character_width()) + 4 * m_padding;
-    auto newHeight = total_rows() * line_height() + 2 * m_padding;
-    set_content_size({ static_cast<int>(newWidth), static_cast<int>(newHeight) });
+    update_content_size();
 }
 
 Optional<u8> HexEditor::get_byte(size_t position)
@@ -276,24 +323,26 @@ Optional<HexEditor::OffsetData> HexEditor::offset_at(Gfx::IntPoint position) con
     auto absolute_x = horizontal_scrollbar().value() + position.x();
     auto absolute_y = vertical_scrollbar().value() + position.y();
 
-    auto hex_start_x = frame_thickness() + m_address_bar_width;
+    auto hex_start_x = frame_thickness() + offset_area_width();
     auto hex_start_y = frame_thickness() + m_padding;
-    auto hex_end_x = static_cast<int>(hex_start_x + bytes_per_row() * cell_width());
+    auto hex_end_x = hex_start_x + hex_area_width();
     auto hex_end_y = static_cast<int>(hex_start_y + m_padding + total_rows() * line_height());
 
-    auto text_start_x = static_cast<int>(frame_thickness() + m_address_bar_width + 2 * m_padding + bytes_per_row() * cell_width());
+    auto text_start_x = hex_start_x + hex_area_width();
     auto text_start_y = frame_thickness() + m_padding;
-    auto text_end_x = static_cast<int>(text_start_x + bytes_per_row() * character_width());
+    auto text_end_x = text_start_x + text_area_width();
     auto text_end_y = static_cast<int>(text_start_y + m_padding + total_rows() * line_height());
 
     // Hexadecimal display
     if (absolute_x >= hex_start_x && absolute_x <= hex_end_x && absolute_y >= hex_start_y && absolute_y <= hex_end_y) {
-        if (absolute_x < hex_start_x || absolute_y < hex_start_y)
-            return {};
+        auto hex_text_start_x = hex_start_x + m_padding;
+        auto hex_text_end_x = hex_end_x - m_padding;
+        absolute_x = clamp(absolute_x, hex_text_start_x, hex_text_end_x);
 
-        auto byte_x = (absolute_x - hex_start_x) / cell_width();
+        auto group_x = (absolute_x - hex_text_start_x) / group_width();
+        auto byte_within_group = (absolute_x - hex_text_start_x - group_x * group_width()) / cell_width();
         auto byte_y = (absolute_y - hex_start_y) / line_height();
-        auto offset = (byte_y * m_bytes_per_row) + byte_x;
+        auto offset = (byte_y * bytes_per_row()) + (group_x * bytes_per_group()) + byte_within_group;
 
         if (offset >= m_document->size())
             return {};
@@ -303,12 +352,13 @@ Optional<HexEditor::OffsetData> HexEditor::offset_at(Gfx::IntPoint position) con
 
     // Text display
     if (absolute_x >= text_start_x && absolute_x <= text_end_x && absolute_y >= text_start_y && absolute_y <= text_end_y) {
-        if (absolute_x < hex_start_x || absolute_y < hex_start_y)
-            return {};
+        auto text_text_start_x = text_start_x + m_padding;
+        auto text_text_end_x = text_end_x - m_padding;
+        absolute_x = clamp(absolute_x, text_text_start_x, text_text_end_x);
 
-        auto byte_x = (absolute_x - text_start_x) / character_width();
+        auto byte_x = (absolute_x - text_text_start_x) / character_width();
         auto byte_y = (absolute_y - text_start_y) / line_height();
-        auto offset = (byte_y * m_bytes_per_row) + byte_x;
+        auto offset = (byte_y * bytes_per_row()) + byte_x;
 
         if (offset >= m_document->size())
             return {};
@@ -390,12 +440,70 @@ void HexEditor::scroll_position_into_view(size_t position)
     size_t y = position / bytes_per_row();
     size_t x = position % bytes_per_row();
     Gfx::IntRect rect {
-        static_cast<int>(frame_thickness() + offset_margin_width() + x * cell_width() + 2 * m_padding),
+        static_cast<int>(frame_thickness() + offset_area_width() + m_padding + x * cell_width()),
         static_cast<int>(frame_thickness() + m_padding + y * line_height()),
         static_cast<int>(cell_width()),
         static_cast<int>(line_height() - m_line_spacing)
     };
     scroll_into_view(rect, true, true);
+}
+
+size_t HexEditor::total_rows() const
+{
+    return ceil_div(m_content_length, bytes_per_row());
+}
+
+size_t HexEditor::line_height() const
+{
+    return font().pixel_size_rounded_up() + m_line_spacing;
+}
+
+size_t HexEditor::character_width() const
+{
+    return font().glyph_fixed_width();
+}
+
+size_t HexEditor::cell_gap() const
+{
+    return character_width() / 2;
+}
+
+size_t HexEditor::cell_width() const
+{
+    return character_width() * 2 + cell_gap();
+}
+
+size_t HexEditor::group_gap() const
+{
+    return character_width() * 1.5;
+}
+
+size_t HexEditor::group_width() const
+{
+    return (character_width() * 2 * bytes_per_group())
+        + (cell_gap() * (bytes_per_group() - 1))
+        + group_gap();
+}
+
+int HexEditor::offset_area_width() const
+{
+    if (!m_show_offsets_column)
+        return 0;
+    // By a fun coincidence, decimal and hexadecimal are both 10 characters for the 32-bit range.
+    // (decimal is up to 10 digits; hex is 8 digits with a 2-character prefix)
+    return m_padding + font().width_rounded_up("0X12345678"sv) + m_padding;
+}
+
+int HexEditor::hex_area_width() const
+{
+    return m_padding
+        + groups_per_row() * group_width() - group_gap()
+        + m_padding;
+}
+
+int HexEditor::text_area_width() const
+{
+    return m_padding + bytes_per_row() * character_width() + m_padding;
 }
 
 void HexEditor::keydown_event(GUI::KeyEvent& event)
@@ -560,6 +668,12 @@ void HexEditor::context_menu_event(GUI::ContextMenuEvent& event)
     m_context_menu->popup(event.screen_position());
 }
 
+void HexEditor::theme_change_event(GUI::ThemeChangeEvent&)
+{
+    set_font(Gfx::FontDatabase::default_fixed_width_font());
+    update_content_size();
+}
+
 void HexEditor::update_status()
 {
     if (on_status_change)
@@ -587,57 +701,80 @@ void HexEditor::paint_event(GUI::PaintEvent& event)
     painter.translate(frame_thickness(), frame_thickness());
     painter.translate(-horizontal_scrollbar().value(), -vertical_scrollbar().value());
 
-    Gfx::IntRect offset_clip_rect {
-        0,
-        vertical_scrollbar().value(),
-        m_address_bar_width - m_padding,
-        height() - height_occupied_by_horizontal_scrollbar() //(total_rows() * line_height()) + 5
-    };
-    painter.fill_rect(offset_clip_rect, palette().ruler());
-    painter.draw_line(offset_clip_rect.top_right(), offset_clip_rect.bottom_right().translated(-1), palette().ruler_border());
+    int offset_area_start_x = frame_thickness();
+    int offset_area_text_start_x = offset_area_start_x + m_padding;
+    int hex_area_start_x = offset_area_start_x + offset_area_width();
+    int hex_area_text_start_x = hex_area_start_x + m_padding;
+    int text_area_start_x = hex_area_start_x + hex_area_width();
+    int text_area_text_start_x = text_area_start_x + m_padding;
 
-    auto margin_and_hex_width = static_cast<int>(offset_margin_width() + m_bytes_per_row * cell_width() + 3 * m_padding);
-    painter.draw_line({ margin_and_hex_width, 0 },
-        { margin_and_hex_width, vertical_scrollbar().value() + (height() - height_occupied_by_horizontal_scrollbar()) },
+    if (m_show_offsets_column) {
+        Gfx::IntRect offset_clip_rect {
+            0,
+            vertical_scrollbar().value(),
+            offset_area_width(),
+            height() - height_occupied_by_horizontal_scrollbar()
+        };
+        painter.fill_rect(offset_clip_rect, palette().ruler());
+        painter.draw_line(offset_clip_rect.top_right(), offset_clip_rect.bottom_right(), palette().ruler_border());
+    }
+
+    painter.draw_line({ text_area_start_x, 0 },
+        { text_area_start_x, vertical_scrollbar().value() + (height() - height_occupied_by_horizontal_scrollbar()) },
         palette().ruler_border());
 
     size_t view_height = (height() - height_occupied_by_horizontal_scrollbar());
     size_t min_row = max(0, vertical_scrollbar().value() / line_height());              // if below 0 then use 0
     size_t max_row = min(total_rows(), min_row + ceil_div(view_height, line_height())); // if above calculated rows, use calculated rows
 
-    // paint offsets
-    for (size_t i = min_row; i < max_row; i++) {
-        Gfx::IntRect side_offset_rect {
-            frame_thickness() + m_padding,
-            static_cast<int>(frame_thickness() + m_padding + i * line_height()),
-            width() - width_occupied_by_vertical_scrollbar(),
-            height() - height_occupied_by_horizontal_scrollbar()
-        };
+    for (size_t row = min_row; row < max_row; row++) {
+        int row_text_y = frame_thickness() + m_padding + row * line_height();
+        int row_background_y = row_text_y - m_line_spacing / 2;
 
-        bool is_current_line = (m_position / bytes_per_row()) == i;
-        auto line = String::formatted("{:#08X}", i * bytes_per_row()).release_value_but_fixme_should_propagate_errors();
-        painter.draw_text(
-            side_offset_rect,
-            line,
-            is_current_line ? font().bold_variant() : font(),
-            Gfx::TextAlignment::TopLeft,
-            is_current_line ? palette().ruler_active_text() : palette().ruler_inactive_text());
-    }
+        // Paint offsets
+        if (m_show_offsets_column) {
+            Gfx::IntRect side_offset_rect {
+                offset_area_text_start_x,
+                row_text_y,
+                width() - width_occupied_by_vertical_scrollbar(),
+                height() - height_occupied_by_horizontal_scrollbar()
+            };
 
-    for (size_t i = min_row; i < max_row; i++) {
-        for (size_t j = 0; j < bytes_per_row(); j++) {
-            auto byte_position = (i * bytes_per_row()) + j;
+            bool is_current_line = (m_position / bytes_per_row()) == row;
+            String offset_text;
+            switch (m_offset_format) {
+            case OffsetFormat::Decimal:
+                offset_text = MUST(String::formatted("{:010d}", row * bytes_per_row()));
+                break;
+            case OffsetFormat::Hexadecimal:
+                offset_text = MUST(String::formatted("{:#08X}", row * bytes_per_row()));
+                break;
+            }
+            painter.draw_text(
+                side_offset_rect,
+                offset_text,
+                is_current_line ? font().bold_variant() : font(),
+                Gfx::TextAlignment::TopLeft,
+                is_current_line ? palette().ruler_active_text() : palette().ruler_inactive_text());
+        }
+
+        // Paint bytes
+        for (size_t column = 0; column < bytes_per_row(); column++) {
+            auto byte_position = (row * bytes_per_row()) + column;
             if (byte_position >= m_document->size())
                 return;
+
+            auto group = column / bytes_per_group();
+            auto column_within_group = column % bytes_per_group();
 
             auto const cell = m_document->get(byte_position);
             auto const annotation = m_document->annotations().closest_annotation_at(byte_position);
 
             Gfx::IntRect hex_display_rect_high_nibble {
-                frame_thickness() + offset_margin_width() + j * cell_width() + 2 * m_padding,
-                frame_thickness() + m_padding + i * line_height(),
-                cell_width() / 2,
-                line_height() - m_line_spacing
+                static_cast<int>(hex_area_text_start_x + (group * group_width()) + (column_within_group * cell_width())),
+                row_text_y,
+                static_cast<int>(character_width()),
+                static_cast<int>(line_height() - m_line_spacing),
             };
 
             Gfx::IntRect hex_display_rect_low_nibble {
@@ -648,10 +785,10 @@ void HexEditor::paint_event(GUI::PaintEvent& event)
             };
 
             Gfx::IntRect background_rect {
-                frame_thickness() + offset_margin_width() + j * cell_width() + 1 * m_padding,
-                frame_thickness() + m_line_spacing / 2 + i * line_height(),
-                cell_width(),
-                line_height()
+                static_cast<int>(hex_display_rect_high_nibble.x() - character_width() / 2),
+                row_background_y,
+                static_cast<int>(character_width() * 3),
+                static_cast<int>(line_height()),
             };
 
             auto line = String::formatted("{:02X}", cell.value).release_value_but_fixme_should_propagate_errors();
@@ -667,14 +804,14 @@ void HexEditor::paint_event(GUI::PaintEvent& event)
             // 4. Annotations
             // 5. Null bytes
             // 6. Regular formatting
-            auto determine_background_color = [&](EditMode edit_mode) -> Gfx::Color {
+            auto determine_background_color = [&](EditMode edit_mode) -> Optional<Gfx::Color> {
                 if (selected)
                     return cell.modified ? palette().selection().inverted() : palette().selection();
                 if (byte_position == m_position && m_edit_mode != edit_mode)
                     return palette().inactive_selection();
                 if (annotation.has_value())
                     return annotation->background_color;
-                return palette().color(background_role());
+                return {};
             };
             auto determine_text_color = [&](EditMode edit_mode) -> Gfx::Color {
                 if (cell.modified)
@@ -689,26 +826,27 @@ void HexEditor::paint_event(GUI::PaintEvent& event)
                     return palette().color(ColorRole::PlaceholderText);
                 return palette().color(foreground_role());
             };
-            Gfx::Color background_color_hex = determine_background_color(EditMode::Hex);
-            Gfx::Color background_color_text = determine_background_color(EditMode::Text);
-            Gfx::Color text_color_hex = determine_text_color(EditMode::Hex);
-            Gfx::Color text_color_text = determine_text_color(EditMode::Text);
+            auto background_color_hex = determine_background_color(EditMode::Hex);
+            auto background_color_text = determine_background_color(EditMode::Text);
+            auto text_color_hex = determine_text_color(EditMode::Hex);
+            auto text_color_text = determine_text_color(EditMode::Text);
             auto& font = cell.modified ? this->font().bold_variant() : this->font();
 
-            painter.fill_rect(background_rect, background_color_hex);
+            if (background_color_hex.has_value())
+                painter.fill_rect(background_rect, *background_color_hex);
 
             Gfx::IntRect text_display_rect {
-                frame_thickness() + offset_margin_width() + bytes_per_row() * cell_width() + j * character_width() + 4 * m_padding,
-                frame_thickness() + m_padding + i * line_height(),
-                character_width(),
-                line_height() - m_line_spacing
+                static_cast<int>(text_area_text_start_x + column * character_width()),
+                row_text_y,
+                static_cast<int>(character_width()),
+                static_cast<int>(line_height() - m_line_spacing),
             };
 
             auto draw_cursor_rect = [&]() {
                 if (byte_position == m_position) {
                     Gfx::IntRect cursor_position_rect {
                         (m_edit_mode == EditMode::Hex) ? static_cast<int>(hex_display_rect_high_nibble.left() + m_cursor_at_low_nibble * character_width()) : text_display_rect.left(),
-                        static_cast<int>(frame_thickness() + m_line_spacing / 2 + i * line_height()),
+                        row_background_y,
                         static_cast<int>(character_width()),
                         static_cast<int>(line_height())
                     };
@@ -728,13 +866,14 @@ void HexEditor::paint_event(GUI::PaintEvent& event)
             }
 
             Gfx::IntRect text_background_rect {
-                frame_thickness() + offset_margin_width() + bytes_per_row() * cell_width() + j * character_width() + 4 * m_padding,
-                frame_thickness() + m_line_spacing / 2 + i * line_height(),
-                character_width(),
-                line_height()
+                static_cast<int>(text_area_text_start_x + column * character_width()),
+                row_background_y,
+                static_cast<int>(character_width()),
+                static_cast<int>(line_height()),
             };
 
-            painter.fill_rect(text_background_rect, background_color_text);
+            if (background_color_text.has_value())
+                painter.fill_rect(text_background_rect, *background_color_text);
 
             if (m_edit_mode == EditMode::Text)
                 draw_cursor_rect();
@@ -931,7 +1070,18 @@ void HexEditor::show_edit_annotation_dialog(Annotation& annotation)
 
 void HexEditor::show_delete_annotation_dialog(Annotation& annotation)
 {
-    auto result = GUI::MessageBox::show(window(), "Delete this annotation?"sv, "Delete annotation?"sv, GUI::MessageBox::Type::Question, GUI::MessageBox::InputType::YesNo);
+    StringBuilder builder;
+    builder.append("Delete '"sv);
+    Utf8View comments_first_line { annotation.comments.bytes_as_string_view().find_first_split_view('\n') };
+    auto const max_annotation_text_length = 40;
+    if (comments_first_line.length() <= max_annotation_text_length) {
+        builder.append(comments_first_line.as_string());
+    } else {
+        builder.appendff("{}...", comments_first_line.unicode_substring_view(0, max_annotation_text_length));
+    }
+    builder.append("'?"sv);
+
+    auto result = GUI::MessageBox::show(window(), builder.string_view(), "Delete annotation?"sv, GUI::MessageBox::Type::Question, GUI::MessageBox::InputType::YesNo);
     if (result == GUI::Dialog::ExecResult::Yes) {
         m_document->annotations().delete_annotation(annotation);
         update();

@@ -5,6 +5,7 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/TreeWalkerPrototype.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/DOM/NodeFilter.h>
 #include <LibWeb/DOM/TreeWalker.h>
@@ -27,7 +28,7 @@ TreeWalker::~TreeWalker() = default;
 void TreeWalker::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::TreeWalkerPrototype>(realm, "TreeWalker"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(TreeWalker);
 }
 
 void TreeWalker::visit_edges(Cell::Visitor& visitor)
@@ -246,7 +247,7 @@ JS::ThrowCompletionOr<NodeFilter::Result> TreeWalker::filter(Node& node)
 {
     // 1. If traverser’s active flag is set, then throw an "InvalidStateError" DOMException.
     if (m_active)
-        return throw_completion(WebIDL::InvalidStateError::create(realm(), "NodeIterator is already active"_fly_string));
+        return throw_completion(WebIDL::InvalidStateError::create(realm(), "NodeIterator is already active"_string));
 
     // 2. Let n be node’s nodeType attribute value − 1.
     auto n = node.node_type() - 1;

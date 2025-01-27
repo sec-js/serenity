@@ -11,8 +11,10 @@
 #include <LibCore/ConfigFile.h>
 #include <LibCore/DirIterator.h>
 #include <LibCore/Process.h>
+#include <LibCore/StandardPaths.h>
 #include <LibDesktop/AppFile.h>
 #include <LibFileSystem/FileSystem.h>
+#include <LibGUI/MessageBox.h>
 
 namespace Desktop {
 
@@ -87,6 +89,12 @@ ByteString AppFile::executable() const
     auto executable = m_config->read_entry("App", "Executable").trim_whitespace();
     VERIFY(!executable.is_empty());
     return executable;
+}
+
+Vector<ByteString> AppFile::arguments() const
+{
+    auto arguments = m_config->read_entry("App", "Arguments").trim_whitespace();
+    return arguments.split(' ');
 }
 
 ByteString AppFile::description() const
@@ -167,16 +175,62 @@ Vector<ByteString> AppFile::launcher_protocols() const
     return protocols;
 }
 
-bool AppFile::spawn(ReadonlySpan<StringView> arguments) const
+ErrorOr<void> AppFile::spawn(ReadonlySpan<StringView> user_arguments) const
 {
     if (!is_valid())
-        return false;
+        return Error::from_string_literal("AppFile is invalid");
 
-    auto pid = Core::Process::spawn(executable(), arguments, working_directory());
-    if (pid.is_error())
-        return false;
+    Vector<StringView> args;
 
-    return true;
+    auto arguments = AppFile::arguments();
+    for (auto const& argument : arguments)
+        args.append(argument);
+
+    args.extend(Vector(user_arguments));
+
+    TRY(Core::Process::spawn(executable(), args, working_directory()));
+    return {};
+}
+
+ErrorOr<void> AppFile::spawn_with_escalation(ReadonlySpan<StringView> user_arguments) const
+{
+    if (!is_valid())
+        return Error::from_string_literal("AppFile is invalid");
+
+    StringView exe;
+    Vector<StringView, 2> args;
+
+    auto executable = AppFile::executable();
+    auto arguments = AppFile::arguments();
+
+    for (auto const& argument : arguments)
+        args.append(argument);
+
+    // FIXME: These single quotes won't be enough for executables with single quotes in their name.
+    auto pls_with_executable = ByteString::formatted("/bin/pls '{}'", executable);
+    if (run_in_terminal() && !requires_root()) {
+        exe = "/bin/Terminal"sv;
+        args = { "-e"sv, executable };
+    } else if (!run_in_terminal() && requires_root()) {
+        exe = "/bin/Escalator"sv;
+        args = { executable };
+    } else if (run_in_terminal() && requires_root()) {
+        exe = "/bin/Terminal"sv;
+        args = { "-e"sv, pls_with_executable };
+    } else {
+        exe = executable;
+    }
+    args.extend(Vector(user_arguments));
+
+    TRY(Core::Process::spawn(exe, args.span(),
+        working_directory().is_empty() ? Core::StandardPaths::home_directory() : working_directory()));
+    return {};
+}
+
+void AppFile::spawn_with_escalation_or_show_error(GUI::Window& window, ReadonlySpan<StringView> arguments) const
+{
+    if (auto result = spawn_with_escalation(arguments); result.is_error())
+        GUI::MessageBox::show_error(&window, ByteString::formatted("Failed to spawn {} with escalation: {}", executable(), result.error()));
 }
 
 }

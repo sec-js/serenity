@@ -69,8 +69,18 @@ void TerminalWidget::set_pty_master_fd(int fd)
             set_pty_master_fd(-1);
             return;
         }
+
         for (ssize_t i = 0; i < nread; ++i)
             m_terminal.on_input(buffer[i]);
+
+        auto owned_by_startup_process = m_startup_process_owns_pty;
+        auto pgrp = tcgetpgrp(m_ptm_fd);
+        m_startup_process_owns_pty = pgrp == m_startup_process_id;
+        if (m_startup_process_owns_pty != owned_by_startup_process) {
+            // pty owner state changed, handle it.
+            handle_pty_owner_change(pgrp);
+        }
+
         flush_dirty_lines();
     };
 }
@@ -79,15 +89,16 @@ TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy)
     : m_terminal(*this)
     , m_automatic_size_policy(automatic_size_policy)
 {
-    static_assert(sizeof(m_colors) == sizeof(xterm_colors));
-    memcpy(m_colors, xterm_colors, sizeof(m_colors));
+    VERIFY(m_colors.size() == xterm_colors.size());
+    for (size_t i = 0; i < xterm_colors.size(); i++)
+        m_colors[i] = Gfx::Color::from_rgb(xterm_colors[i]);
 
     set_override_cursor(Gfx::StandardCursor::IBeam);
     set_focus_policy(GUI::FocusPolicy::StrongFocus);
     set_pty_master_fd(ptm_fd);
 
     on_emoji_input = [this](auto emoji) {
-        inject_string(emoji);
+        emit(emoji.bytes().data(), emoji.length());
     };
 
     m_cursor_blink_timer = add<Core::Timer>();
@@ -140,11 +151,16 @@ TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy)
         clear_including_history();
     });
 
+    m_clear_to_previous_mark_action = GUI::Action::create("Clear &Previous Command", { Mod_Ctrl | Mod_Shift, Key_U }, [this](auto&) {
+        clear_to_previous_mark();
+    });
+
     m_context_menu = GUI::Menu::construct();
     m_context_menu->add_action(copy_action());
     m_context_menu->add_action(paste_action());
     m_context_menu->add_separator();
     m_context_menu->add_action(clear_including_history_action());
+    m_context_menu->add_action(clear_to_previous_mark_action());
 
     update_copy_action();
     update_paste_action();
@@ -232,7 +248,7 @@ void TerminalWidget::keydown_event(GUI::KeyEvent& event)
         m_scrollbar->increase_slider_by(m_terminal.rows());
         return;
     }
-    if (event.key() == KeyCode::Key_Alt) {
+    if (event.key() == KeyCode::Key_LeftAlt) {
         m_alt_key_held = true;
         return;
     }
@@ -250,14 +266,14 @@ void TerminalWidget::keydown_event(GUI::KeyEvent& event)
 
     m_terminal.handle_key_press(event.key(), event.code_point(), event.modifiers());
 
-    if (event.key() != Key_Control && event.key() != Key_Alt && event.key() != Key_LeftShift && event.key() != Key_RightShift && event.key() != Key_Super)
+    if (event.key() != Key_LeftControl && event.key() != Key_LeftAlt && event.key() != Key_LeftShift && event.key() != Key_RightShift && event.key() != Key_LeftSuper)
         scroll_to_bottom();
 }
 
 void TerminalWidget::keyup_event(GUI::KeyEvent& event)
 {
     switch (event.key()) {
-    case KeyCode::Key_Alt:
+    case KeyCode::Key_LeftAlt:
         m_alt_key_held = false;
         return;
     default:
@@ -412,6 +428,10 @@ void TerminalWidget::paint_event(GUI::PaintEvent& event)
 
             if (code_point == ' ')
                 continue;
+
+            if (has_flag(attribute.flags, VT::Attribute::Flags::Concealed)) {
+                continue;
+            }
 
             auto character_rect = glyph_rect(visual_row, column);
 
@@ -868,8 +888,8 @@ void TerminalWidget::mousemove_event(GUI::MouseEvent& event)
 
             auto handlers = Desktop::Launcher::get_handlers_for_url(attribute.href);
             if (!handlers.is_empty()) {
-                auto url = URL(attribute.href);
-                auto path = url.serialize_path();
+                auto url = URL::URL(attribute.href);
+                auto path = URL::percent_decode(url.serialize_path());
 
                 auto app_file = Desktop::AppFile::get_for_app(LexicalPath::basename(handlers[0]));
                 auto app_name = app_file->is_valid() ? app_file->name() : LexicalPath::basename(handlers[0]);
@@ -1035,6 +1055,22 @@ void TerminalWidget::terminal_history_changed(int delta)
         m_selection.offset_row(delta);
 }
 
+void TerminalWidget::terminal_did_perform_possibly_partial_clear()
+{
+    // Just pretend the whole terminal was cleared.
+    // Force an update by resizing slightly and then back to the original size.
+    winsize ws;
+    for (ssize_t offset = 1; offset >= 0; --offset) {
+        ws.ws_col = m_terminal.columns() - offset;
+        ws.ws_row = m_terminal.rows() - offset;
+        if (m_ptm_fd != -1) {
+            if (ioctl(m_ptm_fd, TIOCSWINSZ, &ws) < 0) {
+                perror("ioctl(TIOCSWINSZ)");
+            }
+        }
+    }
+}
+
 void TerminalWidget::terminal_did_resize(u16 columns, u16 rows)
 {
     auto pixel_size = widget_size_for_font(font());
@@ -1148,7 +1184,7 @@ void TerminalWidget::context_menu_event(GUI::ContextMenuEvent& event)
         }));
         m_context_menu_for_hyperlink->add_action(GUI::Action::create("Copy &Name", [&](auto&) {
             // file://courage/home/anon/something -> /home/anon/something
-            auto path = URL(m_context_menu_href).serialize_path();
+            auto path = URL::percent_decode(URL::URL(m_context_menu_href).serialize_path());
             // /home/anon/something -> something
             auto name = LexicalPath::basename(path);
             GUI::Clipboard::the().set_plain_text(name);
@@ -1163,8 +1199,7 @@ void TerminalWidget::context_menu_event(GUI::ContextMenuEvent& event)
 
 void TerminalWidget::drag_enter_event(GUI::DragEvent& event)
 {
-    auto const& mime_types = event.mime_types();
-    if (mime_types.contains_slow("text/plain"sv) || mime_types.contains_slow("text/uri-list"sv))
+    if (event.mime_data().has_text() || event.mime_data().has_urls())
         event.accept();
 }
 
@@ -1178,10 +1213,13 @@ void TerminalWidget::drop_event(GUI::DropEvent& event)
             if (!first)
                 send_non_user_input(" "sv.bytes());
 
-            if (url.scheme() == "file")
-                send_non_user_input(url.serialize_path().bytes());
-            else
-                send_non_user_input(url.to_byte_string().bytes());
+            if (url.scheme() == "file") {
+                auto path = URL::percent_decode(url.serialize_path());
+                send_non_user_input(path.bytes());
+            } else {
+                auto url_string = url.to_byte_string();
+                send_non_user_input(url_string.bytes());
+            }
 
             first = false;
         }
@@ -1216,6 +1254,15 @@ void TerminalWidget::update_cached_font_metrics()
 void TerminalWidget::clear_including_history()
 {
     m_terminal.clear_including_history();
+}
+
+void TerminalWidget::clear_to_previous_mark()
+{
+    auto marks = m_terminal.marks().values();
+    size_t offset = m_startup_process_owns_pty ? 2 : 1; // If the shell is the active process, we have an extra mark.
+    if (marks.size() < offset)
+        return;
+    m_terminal.clear_to_mark(marks[marks.size() - offset]);
 }
 
 void TerminalWidget::scroll_to_bottom()
@@ -1373,6 +1420,53 @@ ByteString TerminalWidget::stringify_cursor_shape(VT::CursorShape cursor_shape)
         return "None";
     }
     VERIFY_NOT_REACHED();
+}
+
+Optional<TerminalWidget::BellMode> TerminalWidget::parse_bell(StringView bell_string)
+{
+    if (bell_string == "AudibleBeep")
+        return BellMode::AudibleBeep;
+    if (bell_string == "Visible")
+        return BellMode::Visible;
+    if (bell_string == "Disabled")
+        return BellMode::Disabled;
+    return {};
+}
+
+ByteString TerminalWidget::stringify_bell(TerminalWidget::BellMode bell_mode)
+{
+    if (bell_mode == BellMode::AudibleBeep)
+        return "AudibleBeep";
+    if (bell_mode == BellMode::Disabled)
+        return "Disabled";
+    if (bell_mode == BellMode::Visible)
+        return "Visible";
+    VERIFY_NOT_REACHED();
+}
+
+Optional<TerminalWidget::AutoMarkMode> TerminalWidget::parse_automark_mode(StringView automark_mode)
+{
+    if (automark_mode == "MarkNothing")
+        return AutoMarkMode::MarkNothing;
+    if (automark_mode == "MarkInteractiveShellPrompt")
+        return AutoMarkMode::MarkInteractiveShellPrompt;
+    return {};
+}
+
+ByteString TerminalWidget::stringify_automark_mode(AutoMarkMode automark_mode)
+{
+    if (automark_mode == AutoMarkMode::MarkNothing)
+        return "MarkNothing";
+    if (automark_mode == AutoMarkMode::MarkInteractiveShellPrompt)
+        return "MarkInteractiveShellPrompt";
+    VERIFY_NOT_REACHED();
+}
+
+void TerminalWidget::handle_pty_owner_change(pid_t new_owner)
+{
+    if (m_auto_mark_mode == AutoMarkMode::MarkInteractiveShellPrompt && new_owner == m_startup_process_id) {
+        m_terminal.mark_cursor();
+    }
 }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020-2024, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2020-2023, Linus Groh <linusg@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -46,9 +46,11 @@ struct CacheablePropertyMetadata {
     enum class Type {
         NotCacheable,
         OwnProperty,
+        InPrototypeChain,
     };
     Type type { Type::NotCacheable };
     Optional<u32> property_offset;
+    GCPtr<Object const> prototype;
 };
 
 class Object : public Cell {
@@ -56,6 +58,7 @@ class Object : public Cell {
     JS_DECLARE_ALLOCATOR(Object);
 
 public:
+    static NonnullGCPtr<Object> create_prototype(Realm&, Object* prototype);
     static NonnullGCPtr<Object> create(Realm&, Object* prototype);
     static NonnullGCPtr<Object> create_with_premade_shape(Shape&);
 
@@ -136,9 +139,13 @@ public:
     virtual ThrowCompletionOr<bool> internal_is_extensible() const;
     virtual ThrowCompletionOr<bool> internal_prevent_extensions();
     virtual ThrowCompletionOr<Optional<PropertyDescriptor>> internal_get_own_property(PropertyKey const&) const;
-    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const&, PropertyDescriptor const&);
+    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const&, PropertyDescriptor const&, Optional<PropertyDescriptor>* precomputed_get_own_property = nullptr);
     virtual ThrowCompletionOr<bool> internal_has_property(PropertyKey const&) const;
-    virtual ThrowCompletionOr<Value> internal_get(PropertyKey const&, Value receiver, CacheablePropertyMetadata* = nullptr) const;
+    enum class PropertyLookupPhase {
+        OwnProperty,
+        PrototypeChain,
+    };
+    virtual ThrowCompletionOr<Value> internal_get(PropertyKey const&, Value receiver, CacheablePropertyMetadata* = nullptr, PropertyLookupPhase = PropertyLookupPhase::OwnProperty) const;
     virtual ThrowCompletionOr<bool> internal_set(PropertyKey const&, Value value, Value receiver, CacheablePropertyMetadata* = nullptr);
     virtual ThrowCompletionOr<bool> internal_delete(PropertyKey const&);
     virtual ThrowCompletionOr<MarkedVector<Value>> internal_own_property_keys() const;
@@ -180,8 +187,8 @@ public:
     using IntrinsicAccessor = Value (*)(Realm&);
     void define_intrinsic_accessor(PropertyKey const&, PropertyAttributes attributes, IntrinsicAccessor accessor);
 
-    void define_native_function(Realm&, PropertyKey const&, Function<ThrowCompletionOr<Value>(VM&)>, i32 length, PropertyAttributes attributes, Optional<Bytecode::Builtin> builtin = {});
-    void define_native_accessor(Realm&, PropertyKey const&, Function<ThrowCompletionOr<Value>(VM&)> getter, Function<ThrowCompletionOr<Value>(VM&)> setter, PropertyAttributes attributes);
+    void define_native_function(Realm&, PropertyKey const&, ESCAPING Function<ThrowCompletionOr<Value>(VM&)>, i32 length, PropertyAttributes attributes, Optional<Bytecode::Builtin> builtin = {});
+    void define_native_accessor(Realm&, PropertyKey const&, ESCAPING Function<ThrowCompletionOr<Value>(VM&)> getter, ESCAPING Function<ThrowCompletionOr<Value>(VM&)> setter, PropertyAttributes attributes);
 
     virtual bool is_dom_node() const { return false; }
     virtual bool is_function() const { return false; }
@@ -204,8 +211,6 @@ public:
     Value get_direct(size_t index) const { return m_storage[index]; }
     void put_direct(size_t index, Value value) { m_storage[index] = value; }
 
-    static FlatPtr storage_offset() { return OFFSET_OF(Object, m_storage); }
-
     IndexedProperties const& indexed_properties() const { return m_indexed_properties; }
     IndexedProperties& indexed_properties() { return m_indexed_properties; }
     void set_indexed_property_elements(Vector<Value>&& values) { m_indexed_properties = IndexedProperties(move(values)); }
@@ -213,18 +218,14 @@ public:
     Shape& shape() { return *m_shape; }
     Shape const& shape() const { return *m_shape; }
 
-    static FlatPtr shape_offset() { return OFFSET_OF(Object, m_shape); }
+    void convert_to_prototype_if_needed();
 
     template<typename T>
     bool fast_is() const = delete;
 
     void set_prototype(Object*);
 
-    static FlatPtr may_interfere_with_indexed_property_access_offset() { return OFFSET_OF(Object, m_may_interfere_with_indexed_property_access); }
-    static FlatPtr indexed_properties_offset() { return OFFSET_OF(Object, m_indexed_properties); }
-
     [[nodiscard]] bool has_magical_length_property() const { return m_has_magical_length_property; }
-    static FlatPtr has_magical_length_property_offset() { return OFFSET_OF(Object, m_has_magical_length_property); }
 
     [[nodiscard]] bool is_typed_array() const { return m_is_typed_array; }
     void set_is_typed_array() { m_is_typed_array = true; }

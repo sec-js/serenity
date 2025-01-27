@@ -11,12 +11,12 @@ namespace Web::DOM {
 
 JS_DEFINE_ALLOCATOR(XMLDocument);
 
-JS::NonnullGCPtr<XMLDocument> XMLDocument::create(JS::Realm& realm, AK::URL const& url)
+JS::NonnullGCPtr<XMLDocument> XMLDocument::create(JS::Realm& realm, URL::URL const& url)
 {
     return realm.heap().allocate<XMLDocument>(realm, realm, url);
 }
 
-XMLDocument::XMLDocument(JS::Realm& realm, AK::URL const& url)
+XMLDocument::XMLDocument(JS::Realm& realm, URL::URL const& url)
     : Document(realm, url)
 {
 }
@@ -24,7 +24,7 @@ XMLDocument::XMLDocument(JS::Realm& realm, AK::URL const& url)
 void XMLDocument::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::XMLDocumentPrototype>(realm, "XMLDocument"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(XMLDocument);
 }
 
 }

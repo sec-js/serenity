@@ -8,19 +8,24 @@
 #include <LibJS/Runtime/ConsoleObject.h>
 #include <LibWeb/Fetch/Fetching/Fetching.h>
 #include <LibWeb/Fetch/Infrastructure/FetchAlgorithms.h>
+#include <LibWeb/HTML/DedicatedWorkerGlobalScope.h>
+#include <LibWeb/HTML/MessagePort.h>
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
+#include <LibWeb/HTML/Scripting/EnvironmentSettingsSnapshot.h>
 #include <LibWeb/HTML/Scripting/Fetching.h>
 #include <LibWeb/HTML/Scripting/WorkerEnvironmentSettingsObject.h>
 #include <LibWeb/HTML/WorkerDebugConsoleClient.h>
 #include <LibWeb/HTML/WorkerGlobalScope.h>
+#include <LibWeb/HighResolutionTime/TimeOrigin.h>
 #include <LibWeb/Loader/ResourceLoader.h>
 #include <WebWorker/DedicatedWorkerHost.h>
 
 namespace WebWorker {
 
-DedicatedWorkerHost::DedicatedWorkerHost(AK::URL url, String type)
+DedicatedWorkerHost::DedicatedWorkerHost(URL::URL url, Web::Bindings::WorkerType type, String name)
     : m_url(move(url))
-    , m_type(move(type))
+    , m_type(type)
+    , m_name(move(name))
 {
 }
 
@@ -28,9 +33,12 @@ DedicatedWorkerHost::~DedicatedWorkerHost() = default;
 
 // https://html.spec.whatwg.org/multipage/workers.html#run-a-worker
 // FIXME: Extract out into a helper for both shared and dedicated workers
-void DedicatedWorkerHost::run(JS::NonnullGCPtr<Web::Page> page, Web::HTML::TransferDataHolder message_port_data)
+void DedicatedWorkerHost::run(JS::NonnullGCPtr<Web::Page> page, Web::HTML::TransferDataHolder message_port_data, Web::HTML::SerializedEnvironmentSettingsObject const& outside_settings_snapshot)
 {
     bool const is_shared = false;
+
+    // 3. Let unsafeWorkerCreationTime be the unsafe shared current time.
+    auto unsafe_worker_creation_time = Web::HighResolutionTime::unsafe_shared_current_time();
 
     // 7. Let realm execution context be the result of creating a new JavaScript realm given agent and the following customizations:
     auto realm_execution_context = Web::Bindings::create_a_new_javascript_realm(
@@ -41,7 +49,7 @@ void DedicatedWorkerHost::run(JS::NonnullGCPtr<Web::Page> page, Web::HTML::Trans
             // FIXME: Proper support for both SharedWorkerGlobalScope and DedicatedWorkerGlobalScope
             if (is_shared)
                 TODO();
-            return Web::Bindings::main_thread_vm().heap().allocate_without_realm<Web::HTML::WorkerGlobalScope>(realm, page);
+            return Web::Bindings::main_thread_vm().heap().allocate_without_realm<Web::HTML::DedicatedWorkerGlobalScope>(realm, page);
         },
         nullptr);
 
@@ -51,18 +59,24 @@ void DedicatedWorkerHost::run(JS::NonnullGCPtr<Web::Page> page, Web::HTML::Trans
 
     // 9. Set up a worker environment settings object with realm execution context,
     //    outside settings, and unsafeWorkerCreationTime, and let inside settings be the result.
-    auto inner_settings = Web::HTML::WorkerEnvironmentSettingsObject::setup(page, move(realm_execution_context));
+    auto inner_settings = Web::HTML::WorkerEnvironmentSettingsObject::setup(page, move(realm_execution_context), outside_settings_snapshot, unsafe_worker_creation_time);
 
     auto& console_object = *inner_settings->realm().intrinsics().console_object();
-    m_console = adopt_ref(*new Web::HTML::WorkerDebugConsoleClient(console_object.console()));
+    m_console = console_object.heap().allocate_without_realm<Web::HTML::WorkerDebugConsoleClient>(console_object.console());
     VERIFY(m_console);
     console_object.console().set_client(*m_console);
 
     // 10. Set worker global scope's name to the value of options's name member.
-    // FIXME: name property requires the SharedWorkerGlobalScope or DedicatedWorkerGlobalScope child class to be used
+    if (is_shared)
+        TODO();
+    else
+        static_cast<Web::HTML::DedicatedWorkerGlobalScope&>(*worker_global_scope).set_name(m_name);
 
     // 11. Append owner to worker global scope's owner set.
     // FIXME: support for 'owner' set on WorkerGlobalScope
+
+    // IMPLEMENTATION DEFINED: We need an object to represent the fetch response's client
+    auto outside_settings = inner_settings->heap().allocate<Web::HTML::EnvironmentSettingsSnapshot>(inner_settings->realm(), inner_settings->realm_execution_context().copy(), outside_settings_snapshot);
 
     // 12. If is shared is true, then:
     if (is_shared) {
@@ -78,14 +92,14 @@ void DedicatedWorkerHost::run(JS::NonnullGCPtr<Web::Page> page, Web::HTML::Trans
                                  : Web::Fetch::Infrastructure::Request::Destination::Worker;
 
     // In both cases, let performFetch be the following perform the fetch hook given request, isTopLevel and processCustomFetchResponse:
-    auto perform_fetch_function = [inner_settings, worker_global_scope](JS::NonnullGCPtr<Web::Fetch::Infrastructure::Request> request, Web::HTML::IsTopLevel is_top_level, Web::Fetch::Infrastructure::FetchAlgorithms::ProcessResponseConsumeBodyFunction process_custom_fetch_response) -> Web::WebIDL::ExceptionOr<void> {
+    auto perform_fetch_function = [inner_settings, worker_global_scope](JS::NonnullGCPtr<Web::Fetch::Infrastructure::Request> request, Web::HTML::TopLevelModule is_top_level, Web::Fetch::Infrastructure::FetchAlgorithms::ProcessResponseConsumeBodyFunction process_custom_fetch_response) -> Web::WebIDL::ExceptionOr<void> {
         auto& realm = inner_settings->realm();
         auto& vm = realm.vm();
 
         Web::Fetch::Infrastructure::FetchAlgorithms::Input fetch_algorithms_input {};
 
         // 1. If isTopLevel is false, fetch request with processResponseConsumeBody set to processCustomFetchResponse, and abort these steps.
-        if (is_top_level == Web::HTML::IsTopLevel::No) {
+        if (is_top_level == Web::HTML::TopLevelModule::No) {
             fetch_algorithms_input.process_response_consume_body = move(process_custom_fetch_response);
             TRY(Web::Fetch::Fetching::fetch(realm, request, Web::Fetch::Infrastructure::FetchAlgorithms::create(vm, move(fetch_algorithms_input))));
             return {};
@@ -206,15 +220,20 @@ void DedicatedWorkerHost::run(JS::NonnullGCPtr<Web::Page> page, Web::HTML::Trans
     //               and with onComplete and performFetch as defined below.
     // module:   Fetch a module worker script graph given url, outside settings, destination, the value of the credentials member of options, inside settings,
     //               and with onComplete and performFetch as defined below.
-    if (m_type != "classic"sv) {
-        dbgln("Unsupported script type {} for LibWeb/Worker", m_type);
-        TODO();
-    }
-    // FIXME: We don't have outside settings anymore, they live in the owner. https://github.com/whatwg/html/issues/9920
-    if (auto err = Web::HTML::fetch_classic_worker_script(m_url, inner_settings, destination, inner_settings, perform_fetch, on_complete); err.is_error()) {
-        dbgln("Failed to run worker script");
-        // FIXME: Abort the worker properly
-        TODO();
+    if (m_type == Web::Bindings::WorkerType::Classic) {
+        if (auto err = Web::HTML::fetch_classic_worker_script(m_url, outside_settings, destination, inner_settings, perform_fetch, on_complete); err.is_error()) {
+            dbgln("Failed to run worker script");
+            // FIXME: Abort the worker properly
+            TODO();
+        }
+    } else {
+        VERIFY(m_type == Web::Bindings::WorkerType::Module);
+        // FIXME: Pass credentials
+        if (auto err = Web::HTML::fetch_module_worker_script_graph(m_url, outside_settings, destination, inner_settings, perform_fetch, on_complete); err.is_error()) {
+            dbgln("Failed to run worker script");
+            // FIXME: Abort the worker properly
+            TODO();
+        }
     }
 }
 

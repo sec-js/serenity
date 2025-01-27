@@ -47,11 +47,11 @@ static PDF::PDFErrorOr<void> print_document_info(PDF::Document& document)
     return {};
 }
 
-static PDF::PDFErrorOr<NonnullRefPtr<Gfx::Bitmap>> render_page(PDF::Document& document, int page_index)
+static PDF::PDFErrorOr<NonnullRefPtr<Gfx::Bitmap>> render_page(PDF::Document& document, PDF::Page const& page)
 {
-    auto page = TRY(document.get_page(page_index));
-
     auto page_size = Gfx::IntSize { 800, round_to<int>(800 * page.media_box.height() / page.media_box.width()) };
+    if (int rotation_count = (page.rotate / 90) % 4; rotation_count % 2 == 1)
+        page_size = Gfx::IntSize { round_to<int>(800 * page.media_box.width() / page.media_box.height()), 800 };
 
     auto bitmap = TRY(Gfx::Bitmap::create(Gfx::BitmapFormat::BGRx8888, page_size));
 
@@ -60,22 +60,25 @@ static PDF::PDFErrorOr<NonnullRefPtr<Gfx::Bitmap>> render_page(PDF::Document& do
         for (auto const& error : errors.error().errors())
             warnln("warning: {}", error.message());
     }
+    return TRY(PDF::Renderer::apply_page_rotation(bitmap, page));
+}
+
+static PDF::PDFErrorOr<NonnullRefPtr<Gfx::Bitmap>> render_page_to_memory(PDF::Document& document, PDF::Page const& page, int repeats)
+{
+    auto bitmap = TRY(render_page(document, page));
+    for (int i = 0; i < repeats - 1; ++i)
+        (void)TRY(render_page(document, page));
     return bitmap;
 }
 
-static PDF::PDFErrorOr<void> save_rendered_page(PDF::Document& document, int page_index, int repeats, StringView out_path)
+static PDF::PDFErrorOr<void> save_rendered_page(NonnullRefPtr<Gfx::Bitmap> bitmap, StringView out_path)
 {
-    auto bitmap = TRY(render_page(document, page_index));
-    for (int i = 0; i < repeats - 1; ++i)
-        (void)TRY(render_page(document, page_index));
-
     if (!out_path.ends_with(".png"sv, CaseSensitivity::CaseInsensitive))
         return Error::from_string_view("can only save to .png files"sv);
 
     auto output_stream = TRY(Core::File::open(out_path, Core::File::OpenMode::Write));
     auto buffered_stream = TRY(Core::OutputBufferedFile::create(move(output_stream)));
-    ByteBuffer bytes = TRY(Gfx::PNGWriter::encode(*bitmap));
-    TRY(buffered_stream->write_until_depleted(bytes));
+    TRY(Gfx::PNGWriter::encode(*buffered_stream, *bitmap));
 
     return {};
 }
@@ -199,6 +202,9 @@ static PDF::PDFErrorOr<int> pdf_main(Main::Arguments arguments)
     StringView render_path;
     args_parser.add_option(render_path, "Path to render PDF page to", "render", {}, "FILE.png");
 
+    bool render_bench = false;
+    args_parser.add_option(render_bench, "Render to memory, then throw away result (for profiling)", "render-bench", {});
+
     u32 render_repeats = 1;
     args_parser.add_option(render_repeats, "Number of times to render page (for profiling)", "render-repeats", {}, "N");
 
@@ -222,7 +228,7 @@ static PDF::PDFErrorOr<int> pdf_main(Main::Arguments arguments)
     TRY(document->initialize());
 
 #if !defined(AK_OS_SERENITY)
-    if (debugging_stats || !render_path.is_empty()) {
+    if (debugging_stats || !render_path.is_empty() || render_bench) {
         // Get from Build/lagom/bin/pdf to Build/lagom/Root/res.
         auto source_root = LexicalPath(MUST(Core::System::current_executable_path())).parent().parent().string();
         Core::ResourceImplementation::install(make<Core::ResourceImplementationFile>(TRY(String::formatted("{}/Root/res", source_root))));
@@ -253,8 +259,11 @@ static PDF::PDFErrorOr<int> pdf_main(Main::Arguments arguments)
         return 0;
     }
 
-    if (!render_path.is_empty()) {
-        TRY(save_rendered_page(document, page_index, render_repeats, render_path));
+    if (!render_path.is_empty() || render_bench) {
+        auto page = TRY(document->get_page(page_index));
+        auto bitmap = TRY(render_page_to_memory(document, page, render_repeats));
+        if (!render_path.is_empty())
+            TRY(save_rendered_page(move(bitmap), render_path));
         return 0;
     }
 

@@ -8,7 +8,7 @@
 #include "SettingsDialog.h"
 #include "Settings.h"
 #include "StringUtils.h"
-#include <AK/URL.h>
+#include <LibURL/URL.h>
 #include <LibWebView/SearchEngine.h>
 #include <QLabel>
 #include <QMenu>
@@ -28,6 +28,15 @@ SettingsDialog::SettingsDialog(QMainWindow* window)
     m_search_engine_dropdown->setText(qstring_from_ak_string(Settings::the()->search_engine().name));
     m_search_engine_dropdown->setMaximumWidth(200);
 
+    m_preferred_languages = new QLineEdit(this);
+    m_preferred_languages->setText(Settings::the()->preferred_languages().join(","));
+    QObject::connect(m_preferred_languages, &QLineEdit::editingFinished, this, [this] {
+        Settings::the()->set_preferred_languages(m_preferred_languages->text().split(","));
+    });
+    QObject::connect(m_preferred_languages, &QLineEdit::returnPressed, this, [this] {
+        close();
+    });
+
     m_enable_autocomplete = new QCheckBox(this);
     m_enable_autocomplete->setChecked(Settings::the()->enable_autocomplete());
 
@@ -39,15 +48,21 @@ SettingsDialog::SettingsDialog(QMainWindow* window)
     m_new_tab_page->setText(Settings::the()->new_tab_page());
     QObject::connect(m_new_tab_page, &QLineEdit::textChanged, this, [this] {
         auto url_string = ak_string_from_qstring(m_new_tab_page->text());
-        m_new_tab_page->setStyleSheet(URL(url_string).is_valid() ? "" : "border: 1px solid red;");
+        m_new_tab_page->setStyleSheet(URL::URL(url_string).is_valid() ? "" : "border: 1px solid red;");
     });
     QObject::connect(m_new_tab_page, &QLineEdit::editingFinished, this, [this] {
         auto url_string = ak_string_from_qstring(m_new_tab_page->text());
-        if (URL(url_string).is_valid())
+        if (URL::URL(url_string).is_valid())
             Settings::the()->set_new_tab_page(m_new_tab_page->text());
     });
     QObject::connect(m_new_tab_page, &QLineEdit::returnPressed, this, [this] {
         close();
+    });
+
+    m_enable_do_not_track = new QCheckBox(this);
+    m_enable_do_not_track->setChecked(Settings::the()->enable_do_not_track());
+    QObject::connect(m_enable_do_not_track, &QCheckBox::stateChanged, this, [&](int state) {
+        Settings::the()->set_enable_do_not_track(state == Qt::Checked);
     });
 
     setup_search_engines();
@@ -55,8 +70,10 @@ SettingsDialog::SettingsDialog(QMainWindow* window)
     m_layout->addRow(new QLabel("Page on New Tab", this), m_new_tab_page);
     m_layout->addRow(new QLabel("Enable Search", this), m_enable_search);
     m_layout->addRow(new QLabel("Search Engine", this), m_search_engine_dropdown);
+    m_layout->addRow(new QLabel("Preferred Language(s)", this), m_preferred_languages);
     m_layout->addRow(new QLabel("Enable Autocomplete", this), m_enable_autocomplete);
     m_layout->addRow(new QLabel("Autocomplete Engine", this), m_autocomplete_engine_dropdown);
+    m_layout->addRow(new QLabel("Send web sites a \"Do Not Track\" request", this), m_enable_do_not_track);
 
     setWindowTitle("Settings");
     setLayout(m_layout);

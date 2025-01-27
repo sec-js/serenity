@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2023, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2021-2024, Linus Groh <linusg@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -56,59 +56,37 @@ static ThrowCompletionOr<Value> perform_promise_common(VM& vm, IteratorRecord& i
 
     // 4. Repeat,
     while (true) {
-        // a. Let next be Completion(IteratorStep(iteratorRecord)).
-        auto next_or_error = iterator_step(vm, iterator_record);
+        // a. Let next be ? IteratorStepValue(iteratorRecord).
+        auto next = TRY(iterator_step_value(vm, iterator_record));
 
-        // b. If next is an abrupt completion, set iteratorRecord.[[Done]] to true.
-        // c. ReturnIfAbrupt(next).
-        if (next_or_error.is_throw_completion()) {
-            iterator_record.done = true;
-            return next_or_error.release_error();
-        }
-        auto next = next_or_error.release_value();
-
-        // d. If next is false, then
-        if (!next) {
-            // i. Set iteratorRecord.[[Done]] to true.
-            iterator_record.done = true;
-
-            // ii. Set remainingElementsCount.[[Value]] to remainingElementsCount.[[Value]] - 1.
-            // iii. If remainingElementsCount.[[Value]] is 0, then
+        // b. If next is DONE, then
+        if (!next.has_value()) {
+            // i. Set remainingElementsCount.[[Value]] to remainingElementsCount.[[Value]] - 1.
+            // ii. If remainingElementsCount.[[Value]] = 0, then
             if (--remaining_elements_count->value == 0) {
-                // 1-2/3. are handled in `end_of_list`
+                // 1-2. are handled in `end_of_list`
                 return TRY(end_of_list(*values));
             }
 
-            // iv. Return resultCapability.[[Promise]].
+            // iii. Return resultCapability.[[Promise]].
             return result_capability.promise();
         }
 
-        // e. Let nextValue be Completion(IteratorValue(next)).
-        auto next_value_or_error = iterator_value(vm, *next);
-
-        // f. If nextValue is an abrupt completion, set iteratorRecord.[[Done]] to true.
-        // g. ReturnIfAbrupt(nextValue).
-        if (next_value_or_error.is_throw_completion()) {
-            iterator_record.done = true;
-            return next_value_or_error.release_error();
-        }
-        auto next_value = next_value_or_error.release_value();
-
-        // h. Append undefined to values.
+        // c. Append undefined to values.
         values->values().append(js_undefined());
 
-        // i. Let nextPromise be ? Call(promiseResolve, constructor, « nextValue »).
-        auto next_promise = TRY(call(vm, promise_resolve.as_function(), constructor, next_value));
+        // d. Let nextPromise be ? Call(promiseResolve, constructor, « next »).
+        auto next_promise = TRY(call(vm, promise_resolve.as_function(), constructor, next.release_value()));
 
-        // j-q. are handled in `invoke_element_function`
+        // e-l. are handled in `invoke_element_function`
 
-        // r. Set remainingElementsCount.[[Value]] to remainingElementsCount.[[Value]] + 1.
+        // m. Set remainingElementsCount.[[Value]] to remainingElementsCount.[[Value]] + 1.
         ++remaining_elements_count->value;
 
-        // s. Perform ? Invoke(nextPromise, "then", « ... »).
+        // n. Perform ? Invoke(nextPromise, "then", « ... »).
         TRY(invoke_element_function(*values, *remaining_elements_count, next_promise, index));
 
-        // t. Set index to index + 1.
+        // o. Set index to index + 1.
         ++index;
     }
 }
@@ -260,6 +238,7 @@ void PromiseConstructor::initialize(Realm& realm)
     define_native_function(realm, vm.names.race, race, 1, attr);
     define_native_function(realm, vm.names.reject, reject, 1, attr);
     define_native_function(realm, vm.names.resolve, resolve, 1, attr);
+    define_native_function(realm, vm.names.try_, try_, 1, attr);
     define_native_function(realm, vm.names.withResolvers, with_resolvers, 0, attr);
 
     define_native_accessor(realm, vm.well_known_symbol_species(), symbol_species_getter, {}, Attribute::Configurable);
@@ -480,7 +459,44 @@ JS_DEFINE_NATIVE_FUNCTION(PromiseConstructor::resolve)
     return TRY(promise_resolve(vm, constructor.as_object(), value));
 }
 
-// 27.2.4.8 Promise.withResolvers ( ), https://tc39.es/ecma262/#sec-promise.withResolvers
+// 27.2.4.8 Promise.try ( callback, ...args ), https://tc39.es/ecma262/#sec-promise.try
+JS_DEFINE_NATIVE_FUNCTION(PromiseConstructor::try_)
+{
+    auto callback = vm.argument(0);
+    Span<Value> args;
+    if (vm.argument_count() > 1) {
+        args = vm.running_execution_context().arguments.span().slice(1, vm.argument_count() - 1);
+    }
+
+    // 1. Let C be the this value.
+    auto constructor = vm.this_value();
+
+    // 2. If C is not an Object, throw a TypeError exception.
+    if (!constructor.is_object())
+        return vm.throw_completion<TypeError>(ErrorType::NotAnObject, constructor.to_string_without_side_effects());
+
+    // 3. Let promiseCapability be ? NewPromiseCapability(C).
+    auto promise_capability = TRY(new_promise_capability(vm, constructor));
+
+    // 4. Let status be Completion(Call(callback, undefined, args)).
+    auto status = JS::call(vm, callback, js_undefined(), args);
+
+    // 5. If status is an abrupt completion, then
+    if (status.is_throw_completion()) {
+        // a. Perform ? Call(promiseCapability.[[Reject]], undefined, « status.[[Value]] »).
+        TRY(JS::call(vm, *promise_capability->reject(), js_undefined(), *status.throw_completion().value()));
+    }
+    // 6. Else,
+    else {
+        // a. Perform ? Call(promiseCapability.[[Resolve]], undefined, « status.[[Value]] »).
+        TRY(JS::call(vm, *promise_capability->resolve(), js_undefined(), status.value()));
+    }
+
+    // 7. Return promiseCapability.[[Promise]].
+    return promise_capability->promise();
+}
+
+// 27.2.4.9 Promise.withResolvers ( ), https://tc39.es/ecma262/#sec-promise.withResolvers
 JS_DEFINE_NATIVE_FUNCTION(PromiseConstructor::with_resolvers)
 {
     auto& realm = *vm.current_realm();
@@ -507,7 +523,7 @@ JS_DEFINE_NATIVE_FUNCTION(PromiseConstructor::with_resolvers)
     return object;
 }
 
-// 27.2.4.9 get Promise [ @@species ], https://tc39.es/ecma262/#sec-get-promise-@@species
+// 27.2.4.10 get Promise [ @@species ], https://tc39.es/ecma262/#sec-get-promise-@@species
 JS_DEFINE_NATIVE_FUNCTION(PromiseConstructor::symbol_species_getter)
 {
     // 1. Return the this value.

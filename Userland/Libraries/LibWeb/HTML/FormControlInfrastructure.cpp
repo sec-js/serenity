@@ -6,10 +6,12 @@
 
 #include <AK/GenericLexer.h>
 #include <AK/Random.h>
+#include <LibWeb/FileAPI/File.h>
 #include <LibWeb/HTML/FormControlInfrastructure.h>
 #include <LibWeb/HTML/FormDataEvent.h>
 #include <LibWeb/HTML/HTMLButtonElement.h>
 #include <LibWeb/HTML/HTMLDataListElement.h>
+#include <LibWeb/HTML/HTMLInputElement.h>
 #include <LibWeb/HTML/HTMLOptionElement.h>
 #include <LibWeb/HTML/HTMLSelectElement.h>
 #include <LibWeb/Infra/Strings.h>
@@ -30,15 +32,26 @@ WebIDL::ExceptionOr<XHR::FormDataEntry> create_entry(JS::Realm& realm, String co
             return TRY_OR_THROW_OOM(vm, Infra::convert_to_scalar_value_string(string));
         },
         // 3. Otherwise:
-        [&](JS::NonnullGCPtr<FileAPI::Blob> const& blob) -> WebIDL::ExceptionOr<Variant<JS::Handle<FileAPI::File>, String>> {
-            // 1. If value is not a File object, then set value to a new File object, representing the same bytes, whose name attribute value is "blob".
-            // 2. If filename is given, then set value to a new File object, representing the same bytes, whose name attribute is filename.
-            String name_attribute;
-            if (filename.has_value())
-                name_attribute = filename.value();
-            else
-                name_attribute = "blob"_string;
-            return JS::make_handle(TRY(FileAPI::File::create(realm, { JS::make_handle(*blob) }, move(name_attribute), {})));
+        [&](JS::NonnullGCPtr<FileAPI::Blob> blob) -> WebIDL::ExceptionOr<Variant<JS::Handle<FileAPI::File>, String>> {
+            // 1. If value is not a File object, then set value to a new File object, representing the same bytes, whose
+            //    name attribute value is "blob".
+            if (!is<FileAPI::File>(*blob)) {
+                FileAPI::FilePropertyBag options {};
+                options.type = blob->type();
+
+                blob = TRY(FileAPI::File::create(realm, { JS::make_handle(*blob) }, "blob"_string, move(options)));
+            }
+
+            // 2. If filename is given, then set value to a new File object, representing the same bytes, whose name
+            //    attribute is filename.
+            if (filename.has_value()) {
+                FileAPI::FilePropertyBag options {};
+                options.type = blob->type();
+
+                blob = TRY(FileAPI::File::create(realm, { JS::make_handle(*blob) }, *filename, move(options)));
+            }
+
+            return JS::make_handle(verify_cast<FileAPI::File>(*blob));
         }));
 
     // 4. Return an entry whose name is name and whose value is value.
@@ -51,8 +64,6 @@ WebIDL::ExceptionOr<XHR::FormDataEntry> create_entry(JS::Realm& realm, String co
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#constructing-the-form-data-set
 WebIDL::ExceptionOr<Optional<Vector<XHR::FormDataEntry>>> construct_entry_list(JS::Realm& realm, HTMLFormElement& form, JS::GCPtr<HTMLElement> submitter, Optional<String> encoding)
 {
-    auto& vm = realm.vm();
-
     // 1. If form's constructing entry list is true, then return null.
     if (form.constructing_entry_list())
         return Optional<Vector<XHR::FormDataEntry>> {};
@@ -61,7 +72,7 @@ WebIDL::ExceptionOr<Optional<Vector<XHR::FormDataEntry>>> construct_entry_list(J
     form.set_constructing_entry_list(true);
 
     // 3. Let controls be a list of all the submittable elements whose form owner is form, in tree order.
-    auto controls = TRY_OR_THROW_OOM(vm, form.get_submittable_elements());
+    auto controls = form.get_submittable_elements();
 
     // 4. Let entry list be a new empty entry list.
     Vector<XHR::FormDataEntry> entry_list;
@@ -90,13 +101,32 @@ WebIDL::ExceptionOr<Optional<Vector<XHR::FormDataEntry>>> construct_entry_list(J
 
         // 2. If the field element is an input element whose type attribute is in the Image Button state, then:
         if (auto* input_element = dynamic_cast<HTML::HTMLInputElement*>(control.ptr()); input_element && input_element->type_state() == HTMLInputElement::TypeAttributeState::ImageButton) {
-            // FIXME: 1. If the field element has a name attribute specified and its value is not the empty string, let name be that value followed by a single U+002E FULL STOP character (.). Otherwise, let name be the empty string.
-            // FIXME: 2. Let namex be the string consisting of the concatenation of name and a single U0078 LATIN SMALL LETTER X character (x).
-            // FIXME: 3. Let namey be the string consisting of the concatenation of name and a single U+0079 LATIN SMALL LETTER Y character (y).
-            // FIXME: 4. The field element is submitter, and before this algorithm was invoked the user indicated a coordinate. Let x be the x-component of the coordinate selected by the user, and let y be the y-component of the coordinate selected by the user.
-            // FIXME: 5. Create an entry with namex and x, and append it to entry list.
-            // FIXME: 6. Create an entry with namey and y, and append it to entry list.
-            // 7. Continue.
+            // 1. If the field element is not submitter, then continue.
+            if (input_element != submitter.ptr())
+                continue;
+
+            // 2. If the field element has a name attribute specified and its value is not the empty string, let name be
+            //    that value followed by U+002E (.). Otherwise, let name be the empty string.
+            String name;
+            if (auto value = input_element->get_attribute(AttributeNames::name); value.has_value() && !value->is_empty())
+                name = MUST(String::formatted("{}.", *value));
+
+            // 3. Let namex be the concatenation of name and U+0078 (x).
+            auto name_x = MUST(String::formatted("{}x", name));
+
+            // 4. Let namey be the concatenation of name and U+0079 (y).
+            auto name_y = MUST(String::formatted("{}y", name));
+
+            // 5. Let (x, y) be the selected coordinate.
+            auto [x, y] = input_element->selected_coordinate();
+
+            // 6. Create an entry with namex and x, and append it to entry list.
+            entry_list.append(XHR::FormDataEntry { .name = move(name_x), .value = String::number(x) });
+
+            // 7. Create an entry with namey and y, and append it to entry list.
+            entry_list.append(XHR::FormDataEntry { .name = move(name_y), .value = String::number(y) });
+
+            // 8. Continue.
             continue;
         }
 
@@ -158,13 +188,20 @@ WebIDL::ExceptionOr<Optional<Vector<XHR::FormDataEntry>>> construct_entry_list(J
             entry_list.append(XHR::FormDataEntry { .name = name.to_string(), .value = control_as_form_associated_element->value() });
         }
 
-        // FIXME: 11. If the element has a dirname attribute, and that attribute's value is not the empty string, then:
-        // FIXME:     1. Let dirname be the value of the element's dirname attribute.
-        // FIXME:     2. Let dir be the string "ltr" if the directionality of the element is 'ltr', and "rtl" otherwise (i.e., when the directionality of the element is 'rtl').
-        // FIXME:     3. Create an entry with dirname and dir, and append it to entry list.
+        // 11. If the element has a dirname attribute, and that attribute's value is not the empty string, then:
+        if (auto attribute = control->get_attribute(HTML::AttributeNames::dirname); attribute.has_value() && !attribute.value().is_empty()) {
+            // 1. Let dirname be the value of the element's dirname attribute.
+            String dirname = attribute.value();
+
+            // 2. Let dir be the string "ltr" if the directionality of the element is 'ltr', and "rtl" otherwise (i.e., when the directionality of the element is 'rtl').
+            String dir = MUST((control->directionality() == DOM::Element::Directionality::Ltr) ? String::from_utf8("ltr"sv) : String::from_utf8("rtl"sv));
+
+            // 3. Create an entry with dirname and dir, and append it to entry list.
+            entry_list.append(XHR::FormDataEntry { .name = dirname, .value = dir });
+        }
     }
     // 6. Let form data be a new FormData object associated with entry list.
-    auto form_data = TRY(XHR::FormData::construct_impl(realm, entry_list));
+    auto form_data = TRY(XHR::FormData::construct_impl(realm, move(entry_list)));
 
     // 7. Fire an event named formdata at form using FormDataEvent, with the formData attribute initialized to form data and the bubbles attribute initialized to true.
     FormDataEventInit init {};
@@ -177,7 +214,7 @@ WebIDL::ExceptionOr<Optional<Vector<XHR::FormDataEntry>>> construct_entry_list(J
     form.set_constructing_entry_list(false);
 
     // 9. Return a clone of entry list.
-    return entry_list;
+    return form_data->entry_list();
 }
 
 ErrorOr<String> normalize_line_breaks(StringView value)
@@ -239,18 +276,18 @@ ErrorOr<SerializedFormData> serialize_to_multipart_form_data(Vector<XHR::FormDat
                 // For filenames replace any 0x0A (LF) bytes with the byte sequence `%0A`, 0x0D (CR) with `%0D` and 0x22 (") with `%22`
                 auto escaped_filename = TRY(escape_line_feed_carriage_return_double_quote(file->name()));
                 // Add a `Content-Disposition` header with a `name` set to entry's name and `filename` set to entry's filename.
-                TRY(builder.try_append(TRY(String::formatted("Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n"sv, escaped_name, escaped_filename))));
+                TRY(builder.try_append(TRY(String::formatted("Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n", escaped_name, escaped_filename))));
                 // The parts of the generated multipart/form-data resource that correspond to file fields must have a `Content-Type` header specified.
-                TRY(builder.try_append(TRY(String::formatted("Content-Type: {}\r\n\r\n"sv, file->type()))));
-                // FIXME: Serialize the contents of the file.
-                TRY(builder.try_append(TRY(String::formatted("\r\n"sv))));
+                TRY(builder.try_append(TRY(String::formatted("Content-Type: {}\r\n\r\n", file->type()))));
+                TRY(builder.try_append(file->raw_bytes()));
+                TRY(builder.try_append("\r\n"sv));
                 return {};
             },
             [&](String const& string) -> ErrorOr<void> {
                 // Replace every occurrence of U+000D (CR) not followed by U+000A (LF), and every occurrence of U+000A (LF) not preceded by U+000D (CR) by a string consisting of a U+000D (CR) and U+000A (LF).
                 auto normalized_value = TRY(normalize_line_breaks(string));
                 // Add a `Content-Disposition` header with a `name` set to entry's name.
-                TRY(builder.try_append(TRY(String::formatted("Content-Disposition: form-data; name=\"{}\"\r\n\r\n"sv, escaped_name))));
+                TRY(builder.try_append(TRY(String::formatted("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", escaped_name))));
                 TRY(builder.try_append(TRY(String::formatted("{}\r\n", normalized_value))));
                 return {};
             }));

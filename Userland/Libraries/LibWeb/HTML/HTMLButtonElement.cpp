@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLButtonElementPrototype.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/HTMLButtonElement.h>
 #include <LibWeb/HTML/HTMLFormElement.h>
@@ -22,7 +23,7 @@ HTMLButtonElement::~HTMLButtonElement() = default;
 void HTMLButtonElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLButtonElementPrototype>(realm, "HTMLButtonElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLButtonElement);
 }
 
 HTMLButtonElement::TypeAttributeState HTMLButtonElement::type_state() const

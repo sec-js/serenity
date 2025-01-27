@@ -73,6 +73,11 @@ class PhotometricInterpretation(EnumWithExportName):
     CIELab = 8
 
 
+class FillOrder(EnumWithExportName):
+    LeftToRight = 1
+    RightToLeft = 2
+
+
 class Orientation(EnumWithExportName):
     Default = 1
     FlipHorizontally = 2
@@ -119,18 +124,19 @@ Tag = namedtuple(
 # FIXME: Some tag have only a few allowed values, we should ensure that
 known_tags: List[Tag] = [
     Tag('256', [TIFFType.UnsignedShort, TIFFType.UnsignedLong], [1], None, "ImageWidth", is_required=True),
-    Tag('257', [TIFFType.UnsignedShort, TIFFType.UnsignedLong], [1], None, "ImageHeight", is_required=True),
-    Tag('258', [TIFFType.UnsignedShort], [], None, "BitsPerSample", is_required=True),
+    Tag('257', [TIFFType.UnsignedShort, TIFFType.UnsignedLong], [1], None, "ImageLength", is_required=True),
+    Tag('258', [TIFFType.UnsignedShort], [], None, "BitsPerSample", is_required=False),
     Tag('259', [TIFFType.UnsignedShort], [1], None, "Compression", Compression, is_required=True),
     Tag('262', [TIFFType.UnsignedShort], [1], None, "PhotometricInterpretation",
         PhotometricInterpretation, is_required=True),
+    Tag('266', [TIFFType.UnsignedShort], [1], FillOrder.LeftToRight, "FillOrder", FillOrder),
     Tag('271', [TIFFType.ASCII], [], None, "Make"),
     Tag('272', [TIFFType.ASCII], [], None, "Model"),
-    Tag('273', [TIFFType.UnsignedShort, TIFFType.UnsignedLong], [], None, "StripOffsets", is_required=True),
+    Tag('273', [TIFFType.UnsignedShort, TIFFType.UnsignedLong], [], None, "StripOffsets", is_required=False),
     Tag('274', [TIFFType.UnsignedShort], [1], Orientation.Default, "Orientation", Orientation),
-    Tag('277', [TIFFType.UnsignedShort], [1], None, "SamplesPerPixel", is_required=True),
+    Tag('277', [TIFFType.UnsignedShort], [1], None, "SamplesPerPixel", is_required=False),
     Tag('278', [TIFFType.UnsignedShort, TIFFType.UnsignedLong], [1], None, "RowsPerStrip", is_required=False),
-    Tag('279', [TIFFType.UnsignedShort, TIFFType.UnsignedLong], [], None, "StripByteCounts", is_required=True),
+    Tag('279', [TIFFType.UnsignedShort, TIFFType.UnsignedLong], [], None, "StripByteCounts", is_required=False),
     Tag('282', [TIFFType.UnsignedRational], [1], None, "XResolution"),
     Tag('283', [TIFFType.UnsignedRational], [1], None, "YResolution"),
     Tag('284', [TIFFType.UnsignedShort], [1], PlanarConfiguration.Chunky, "PlanarConfiguration", PlanarConfiguration),
@@ -142,14 +148,27 @@ known_tags: List[Tag] = [
     Tag('315', [TIFFType.ASCII], [], None, "Artist"),
     Tag('317', [TIFFType.UnsignedShort], [1], Predictor.NoPrediction, "Predictor", Predictor),
     Tag('320', [TIFFType.UnsignedShort], [], None, "ColorMap"),
+    Tag('322', [TIFFType.UnsignedShort, TIFFType.UnsignedLong], [1], None, "TileWidth"),
+    Tag('323', [TIFFType.UnsignedShort, TIFFType.UnsignedLong], [1], None, "TileLength"),
+    Tag('324', [TIFFType.UnsignedShort, TIFFType.UnsignedLong], [], None, "TileOffsets"),
+    Tag('325', [TIFFType.UnsignedShort, TIFFType.UnsignedLong], [], None, "TileByteCounts"),
     Tag('338', [TIFFType.UnsignedShort], [], None, "ExtraSamples", ExtraSample),
     Tag('339', [TIFFType.UnsignedShort], [], SampleFormat.Unsigned, "SampleFormat", SampleFormat),
     Tag('34665', [TIFFType.UnsignedLong, TIFFType.IFD], [1], None, "ExifIFD"),
     Tag('34675', [TIFFType.Undefined], [], None, "ICCProfile"),
+    Tag('34853', [TIFFType.UnsignedLong, TIFFType.IFD], [1], None, "GPSInfo"),
+
+    # GPS Tags (https://exiftool.org/TagNames/GPS.html)
+    Tag('0', [TIFFType.UnsignedLong], [], None, "GPSVersionID"),
+    Tag('1', [TIFFType.ASCII], [2], None, "GPSLatitudeRef"),
+    Tag('2', [TIFFType.UnsignedRational], [3], None, "GPSLatitude"),
+    Tag('3', [TIFFType.ASCII], [2], None, "GPSLongitudeRef"),
+    Tag('4', [TIFFType.UnsignedRational], [3], None, "GPSLongitude"),
 ]
 
-HANDLE_TAG_SIGNATURE_TEMPLATE = ("ErrorOr<void> {namespace}handle_tag(ExifMetadata& metadata, u16 tag,"
-                                 " {namespace}Type type, u32 count, Vector<{namespace}Value>&& value)")
+HANDLE_TAG_SIGNATURE_TEMPLATE = ("ErrorOr<void> {namespace}handle_tag(Function<ErrorOr<void>(u32)>&& subifd_handler, "
+                                 "ExifMetadata& metadata, u16 tag, {namespace}Type type, u32 count, "
+                                 "Vector<{namespace}Value>&& value)")
 HANDLE_TAG_SIGNATURE = HANDLE_TAG_SIGNATURE_TEMPLATE.format(namespace="")
 HANDLE_TAG_SIGNATURE_TIFF_NAMESPACE = HANDLE_TAG_SIGNATURE_TEMPLATE.format(namespace="TIFF::")
 
@@ -398,6 +417,10 @@ struct Rational {{
     using Type = x32;
     x32 numerator;
     x32 denominator;
+
+    double as_double() const {{
+        return static_cast<double>(numerator) / denominator;
+    }}
 }};
 
 {export_promoter()}
@@ -425,7 +448,7 @@ struct AK::Formatter<Gfx::TIFF::Rational<T>> : Formatter<FormatString> {{
     ErrorOr<void> format(FormatBuilder& builder, Gfx::TIFF::Rational<T> value)
     {{
         return Formatter<FormatString>::format(builder, "{{}} ({{}}/{{}})"sv,
-            static_cast<double>(value.numerator) / value.denominator, value.numerator, value.denominator);
+            value.as_double(), value.numerator, value.denominator);
     }}
 }};
 
@@ -478,6 +501,12 @@ def generate_tag_handler(tag: Tag) -> str:
         }}
 """
 
+    handle_subifd = ''
+    if TIFFType.IFD in tag.types:
+        if tag.counts != [1]:
+            raise RuntimeError("Accessing `value[0]` in the C++ code might fail!")
+        handle_subifd = f'TRY(subifd_handler(value[0].get<{tiff_type_to_cpp(TIFFType.IFD)}>()));'
+
     output = fR"""    case {tag.id}:
         // {tag.name}
 
@@ -485,6 +514,7 @@ def generate_tag_handler(tag: Tag) -> str:
 
         {pre_condition}
         {check_value}
+        {handle_subifd}
         metadata.add_entry("{tag.name}"sv, move(value));
         break;
 """

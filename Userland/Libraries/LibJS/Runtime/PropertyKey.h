@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/DeprecatedFlyString.h>
+#include <AK/FlyString.h>
 #include <LibJS/Heap/Handle.h>
 #include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/StringOrSymbol.h>
@@ -69,7 +70,12 @@ public:
         : m_type(Type::String)
         , m_string(DeprecatedFlyString(string))
     {
-        VERIFY(!m_string.is_null());
+    }
+
+    PropertyKey(FlyString const& string)
+        : m_type(Type::String)
+        , m_string(string.to_deprecated_fly_string())
+    {
     }
 
     PropertyKey(DeprecatedFlyString string, StringMayBeNumber string_may_be_number = StringMayBeNumber::Yes)
@@ -77,7 +83,6 @@ public:
         , m_type(Type::String)
         , m_string(move(string))
     {
-        VERIFY(!m_string.is_null());
     }
 
     PropertyKey(NonnullGCPtr<Symbol> symbol)

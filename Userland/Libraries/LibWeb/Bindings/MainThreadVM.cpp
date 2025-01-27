@@ -47,6 +47,7 @@
 #include <LibWeb/SVG/AttributeNames.h>
 #include <LibWeb/SVG/TagNames.h>
 #include <LibWeb/UIEvents/EventNames.h>
+#include <LibWeb/UIEvents/InputTypes.h>
 #include <LibWeb/WebGL/EventNames.h>
 #include <LibWeb/WebIDL/AbstractOperations.h>
 #include <LibWeb/XHR/EventNames.h>
@@ -76,15 +77,21 @@ HTML::Script* active_script()
         });
 }
 
-ErrorOr<void> initialize_main_thread_vm()
+ErrorOr<void> initialize_main_thread_vm(HTML::EventLoop::Type type)
 {
     VERIFY(!s_main_thread_vm);
 
     s_main_thread_vm = TRY(JS::VM::create(make<WebEngineCustomData>()));
+    s_main_thread_vm->on_unimplemented_property_access = [](auto const& object, auto const& property_key) {
+        dbgln("FIXME: Unimplemented IDL interface: '{}.{}'", object.class_name(), property_key.to_string());
+    };
 
     // NOTE: We intentionally leak the main thread JavaScript VM.
     //       This avoids doing an exhaustive garbage collection on process exit.
     s_main_thread_vm->ref();
+
+    auto& custom_data = verify_cast<WebEngineCustomData>(*s_main_thread_vm->custom_data());
+    custom_data.event_loop = s_main_thread_vm->heap().allocate_without_realm<HTML::EventLoop>(type);
 
     // These strings could potentially live on the VM similar to CommonPropertyNames.
     DOM::MutationType::initialize_strings();
@@ -99,11 +106,10 @@ ErrorOr<void> initialize_main_thread_vm()
     SVG::AttributeNames::initialize_strings();
     SVG::TagNames::initialize_strings();
     UIEvents::EventNames::initialize_strings();
+    UIEvents::InputTypes::initialize_strings();
     WebGL::EventNames::initialize_strings();
     XHR::EventNames::initialize_strings();
     XLink::AttributeNames::initialize_strings();
-
-    static_cast<WebEngineCustomData*>(s_main_thread_vm->custom_data())->event_loop.set_vm(*s_main_thread_vm);
 
     // 8.1.5.1 HostEnsureCanAddPrivateElement(O), https://html.spec.whatwg.org/multipage/webappapis.html#the-hostensurecanaddprivateelement-implementation
     s_main_thread_vm->host_ensure_can_add_private_element = [](JS::Object const& object) -> JS::ThrowCompletionOr<void> {
@@ -144,33 +150,35 @@ ErrorOr<void> initialize_main_thread_vm()
         // 4. If script is not null, then set settings object to script's settings object.
         auto& settings_object = script ? script->settings_object() : HTML::current_settings_object();
 
+        // 5. Let global be settingsObject's global object.
+        auto* global_mixin = dynamic_cast<HTML::WindowOrWorkerGlobalScopeMixin*>(&settings_object.global_object());
+        VERIFY(global_mixin);
+        auto& global = global_mixin->this_impl();
+
         switch (operation) {
+        // 6. If operation is "reject",
         case JS::Promise::RejectionOperation::Reject:
-            // 4. If operation is "reject",
-            //    1. Add promise to settings object's about-to-be-notified rejected promises list.
-            settings_object.push_onto_about_to_be_notified_rejected_promises_list(promise);
+            // 1. Append promise to global's about-to-be-notified rejected promises list.
+            global_mixin->push_onto_about_to_be_notified_rejected_promises_list(promise);
             break;
+        // 7. If operation is "handle",
         case JS::Promise::RejectionOperation::Handle: {
-            // 5. If operation is "handle",
-            //    1. If settings object's about-to-be-notified rejected promises list contains promise, then remove promise from that list and return.
-            bool removed_about_to_be_notified_rejected_promise = settings_object.remove_from_about_to_be_notified_rejected_promises_list(promise);
+            // 1. If global's about-to-be-notified rejected promises list contains promise, then remove promise from that list and return.
+            bool removed_about_to_be_notified_rejected_promise = global_mixin->remove_from_about_to_be_notified_rejected_promises_list(promise);
             if (removed_about_to_be_notified_rejected_promise)
                 return;
 
-            // 3. Remove promise from settings object's outstanding rejected promises weak set.
-            bool removed_outstanding_rejected_promise = settings_object.remove_from_outstanding_rejected_promises_weak_set(&promise);
+            // 3. Remove promise from global's outstanding rejected promises weak set.
+            bool removed_outstanding_rejected_promise = global_mixin->remove_from_outstanding_rejected_promises_weak_set(&promise);
 
-            // 2. If settings object's outstanding rejected promises weak set does not contain promise, then return.
+            // 2. If global's outstanding rejected promises weak set does not contain promise, then return.
             // NOTE: This is done out of order because removed_outstanding_rejected_promise will be false if the promise wasn't in the set or true if it was and got removed.
             if (!removed_outstanding_rejected_promise)
                 return;
 
-            // 4. Let global be settings object's global object.
-            auto& global = settings_object.global_object();
-
-            // 5. Queue a global task on the DOM manipulation task source given global to fire an event named rejectionhandled at global, using PromiseRejectionEvent,
+            // 4. Queue a global task on the DOM manipulation task source given global to fire an event named rejectionhandled at global, using PromiseRejectionEvent,
             //    with the promise attribute initialized to promise, and the reason attribute initialized to the value of promise's [[PromiseResult]] internal slot.
-            HTML::queue_global_task(HTML::Task::Source::DOMManipulation, global, [&global, &promise] {
+            HTML::queue_global_task(HTML::Task::Source::DOMManipulation, global, JS::create_heap_function(s_main_thread_vm->heap(), [&global, &promise] {
                 // FIXME: This currently assumes that global is a WindowObject.
                 auto& window = verify_cast<HTML::Window>(global);
 
@@ -181,7 +189,7 @@ ErrorOr<void> initialize_main_thread_vm()
                 };
                 auto promise_rejection_event = HTML::PromiseRejectionEvent::create(HTML::relevant_realm(global), HTML::EventNames::rejectionhandled, event_init);
                 window.dispatch_event(promise_rejection_event);
-            });
+            }));
             break;
         }
         default:
@@ -191,7 +199,7 @@ ErrorOr<void> initialize_main_thread_vm()
 
     // 8.1.5.4.1 HostCallJobCallback(callback, V, argumentsList), https://html.spec.whatwg.org/multipage/webappapis.html#hostcalljobcallback
     s_main_thread_vm->host_call_job_callback = [](JS::JobCallback& callback, JS::Value this_value, ReadonlySpan<JS::Value> arguments_list) {
-        auto& callback_host_defined = verify_cast<WebEngineCustomJobCallbackData>(*callback.custom_data);
+        auto& callback_host_defined = verify_cast<WebEngineCustomJobCallbackData>(*callback.custom_data());
 
         // 1. Let incumbent settings be callback.[[HostDefined]].[[IncumbentSettings]]. (NOTE: Not necessary)
         // 2. Let script execution context be callback.[[HostDefined]].[[ActiveScriptContext]]. (NOTE: Not necessary)
@@ -204,7 +212,7 @@ ErrorOr<void> initialize_main_thread_vm()
             s_main_thread_vm->push_execution_context(*callback_host_defined.active_script_context);
 
         // 5. Let result be Call(callback.[[Callback]], V, argumentsList).
-        auto result = JS::call(*s_main_thread_vm, *callback.callback.cell(), this_value, arguments_list);
+        auto result = JS::call(*s_main_thread_vm, callback.callback(), this_value, arguments_list);
 
         // 6. If script execution context is not null, then pop script execution context from the JavaScript execution context stack.
         if (callback_host_defined.active_script_context) {
@@ -225,9 +233,9 @@ ErrorOr<void> initialize_main_thread_vm()
         auto& global = finalization_registry.realm().global_object();
 
         // 2. Queue a global task on the JavaScript engine task source given global to perform the following steps:
-        HTML::queue_global_task(HTML::Task::Source::JavaScriptEngine, global, [&finalization_registry] {
+        HTML::queue_global_task(HTML::Task::Source::JavaScriptEngine, global, JS::create_heap_function(s_main_thread_vm->heap(), [&finalization_registry] {
             // 1. Let entry be finalizationRegistry.[[CleanupCallback]].[[Callback]].[[Realm]]'s environment settings object.
-            auto& entry = host_defined_environment_settings_object(*finalization_registry.cleanup_callback().callback.cell()->realm());
+            auto& entry = host_defined_environment_settings_object(*finalization_registry.cleanup_callback().callback().realm());
 
             // 2. Check if we can run script with entry. If this returns "do not run", then return.
             if (entry.can_run_script() == HTML::RunScriptDecision::DoNotRun)
@@ -245,11 +253,11 @@ ErrorOr<void> initialize_main_thread_vm()
             // 6. If result is an abrupt completion, then report the exception given by result.[[Value]].
             if (result.is_error())
                 HTML::report_exception(result, finalization_registry.realm());
-        });
+        }));
     };
 
     // 8.1.5.4.3 HostEnqueuePromiseJob(job, realm), https://html.spec.whatwg.org/multipage/webappapis.html#hostenqueuepromisejob
-    s_main_thread_vm->host_enqueue_promise_job = [](Function<JS::ThrowCompletionOr<JS::Value>()> job, JS::Realm* realm) {
+    s_main_thread_vm->host_enqueue_promise_job = [](JS::NonnullGCPtr<JS::HeapFunction<JS::ThrowCompletionOr<JS::Value>()>> job, JS::Realm* realm) {
         // 1. If realm is not null, then let job settings be the settings object for realm. Otherwise, let job settings be null.
         HTML::EnvironmentSettingsObject* job_settings { nullptr };
         if (realm)
@@ -265,8 +273,9 @@ ErrorOr<void> initialize_main_thread_vm()
         // Do note that "implied document" from the spec is handwavy and the spec authors are trying to get rid of it: https://github.com/whatwg/html/issues/4980
         auto* script = active_script();
 
+        auto& heap = realm ? realm->heap() : s_main_thread_vm->heap();
         // NOTE: This keeps job_settings alive by keeping realm alive, which is holding onto job_settings.
-        HTML::queue_a_microtask(script ? script->settings_object().responsible_document().ptr() : nullptr, [job_settings, job = move(job), script_or_module = move(script_or_module)] {
+        HTML::queue_a_microtask(script ? script->settings_object().responsible_document().ptr() : nullptr, JS::create_heap_function(heap, [job_settings, job = move(job), script_or_module = move(script_or_module)] {
             // The dummy execution context has to be kept up here to keep it alive for the duration of the function.
             OwnPtr<JS::ExecutionContext> dummy_execution_context;
 
@@ -290,13 +299,13 @@ ErrorOr<void> initialize_main_thread_vm()
                 // FIXME: We need to setup a dummy execution context in case a JS::NativeFunction is called when processing the job.
                 //        This is because JS::NativeFunction::call excepts something to be on the execution context stack to be able to get the caller context to initialize the environment.
                 //        Do note that the JS spec gives _no_ guarantee that the execution context stack has something on it if HostEnqueuePromiseJob was called with a null realm: https://tc39.es/ecma262/#job-preparedtoevaluatecode
-                dummy_execution_context = JS::ExecutionContext::create(s_main_thread_vm->heap());
+                dummy_execution_context = JS::ExecutionContext::create();
                 dummy_execution_context->script_or_module = script_or_module;
                 s_main_thread_vm->push_execution_context(*dummy_execution_context);
             }
 
             // 3. Let result be job().
-            [[maybe_unused]] auto result = job();
+            auto result = job->function()();
 
             // 4. If job settings is not null, then clean up after running script with job settings.
             if (job_settings) {
@@ -315,11 +324,11 @@ ErrorOr<void> initialize_main_thread_vm()
             // 5. If result is an abrupt completion, then report the exception given by result.[[Value]].
             if (result.is_error())
                 HTML::report_exception(result, job_settings->realm());
-        });
+        }));
     };
 
     // 8.1.5.4.4 HostMakeJobCallback(callable), https://html.spec.whatwg.org/multipage/webappapis.html#hostmakejobcallback
-    s_main_thread_vm->host_make_job_callback = [](JS::FunctionObject& callable) -> JS::JobCallback {
+    s_main_thread_vm->host_make_job_callback = [](JS::FunctionObject& callable) -> JS::NonnullGCPtr<JS::JobCallback> {
         // 1. Let incumbent settings be the incumbent settings object.
         auto& incumbent_settings = HTML::incumbent_settings_object();
 
@@ -332,7 +341,7 @@ ErrorOr<void> initialize_main_thread_vm()
         // 4. If active script is not null, set script execution context to a new JavaScript execution context, with its Function field set to null,
         //    its Realm field set to active script's settings object's Realm, and its ScriptOrModule set to active script's record.
         if (script) {
-            script_execution_context = JS::ExecutionContext::create(s_main_thread_vm->heap());
+            script_execution_context = JS::ExecutionContext::create();
             script_execution_context->function = nullptr;
             script_execution_context->realm = &script->settings_object().realm();
             if (is<HTML::ClassicScript>(script)) {
@@ -351,7 +360,7 @@ ErrorOr<void> initialize_main_thread_vm()
 
         // 5. Return the JobCallback Record { [[Callback]]: callable, [[HostDefined]]: { [[IncumbentSettings]]: incumbent settings, [[ActiveScriptContext]]: script execution context } }.
         auto host_defined = adopt_own(*new WebEngineCustomJobCallbackData(incumbent_settings, move(script_execution_context)));
-        return { JS::make_handle(&callable), move(host_defined) };
+        return JS::JobCallback::create(*s_main_thread_vm, callable, move(host_defined));
     };
 
     // 8.1.5.5.1 HostGetImportMetaProperties(moduleRecord), https://html.spec.whatwg.org/multipage/webappapis.html#hostgetimportmetaproperties
@@ -465,6 +474,7 @@ ErrorOr<void> initialize_main_thread_vm()
         JS::NonnullGCPtr fetch_client { *settings_object };
 
         // 12. If loadState is not undefined, then:
+        HTML::PerformTheFetchHook perform_fetch;
         if (load_state) {
             auto& fetch_context = static_cast<HTML::FetchContext&>(*load_state);
 
@@ -473,6 +483,9 @@ ErrorOr<void> initialize_main_thread_vm()
 
             // 2. Set fetchClient loadState.[[FetchClient]].
             fetch_client = fetch_context.fetch_client;
+
+            // For step 13
+            perform_fetch = fetch_context.perform_fetch;
         }
 
         auto on_single_fetch_complete = HTML::create_on_fetch_script_complete(realm.heap(), [referrer, &realm, load_state, module_request, payload](JS::GCPtr<HTML::Script> const& module_script) -> void {
@@ -517,7 +530,7 @@ ErrorOr<void> initialize_main_thread_vm()
             // 5. Perform FinishLoadingImportedModule(referrer, moduleRequest, payload, completion).
             // NON-STANDARD: To ensure that LibJS can find the module on the stack, we push a new execution context.
 
-            auto module_execution_context = JS::ExecutionContext::create(realm.heap());
+            auto module_execution_context = JS::ExecutionContext::create();
             module_execution_context->realm = realm;
             if (module)
                 module_execution_context->script_or_module = JS::NonnullGCPtr { *module };
@@ -530,8 +543,12 @@ ErrorOr<void> initialize_main_thread_vm()
 
         // 13. Fetch a single imported module script given url, fetchClient, destination, fetchOptions, settingsObject, fetchReferrer,
         //     moduleRequest, and onSingleFetchComplete as defined below.
-        //     If loadState is not undefined and loadState.[[PerformFetch]] is not null, pass loadState.[[PerformFetch]] along as well.#
-        HTML::fetch_single_imported_module_script(realm, url.release_value(), *fetch_client, destination, fetch_options, *settings_object, fetch_referrer, module_request, on_single_fetch_complete);
+        //     If loadState is not undefined and loadState.[[PerformFetch]] is not null, pass loadState.[[PerformFetch]] along as well.
+        HTML::fetch_single_imported_module_script(realm, url.release_value(), *fetch_client, destination, fetch_options, *settings_object, fetch_referrer, module_request, perform_fetch, on_single_fetch_complete);
+    };
+
+    s_main_thread_vm->host_unrecognized_date_string = [](StringView date) {
+        dbgln("Unable to parse date string: \"{}\"", date);
     };
 
     return {};
@@ -559,12 +576,14 @@ void queue_mutation_observer_microtask(DOM::Document const& document)
     // 3. Queue a microtask to notify mutation observers.
     // NOTE: This uses the implied document concept. In the case of mutation observers, it is always done in a node context, so document should be that node's document.
     // FIXME: Is it safe to pass custom_data through?
-    HTML::queue_a_microtask(&document, [&custom_data]() {
+    HTML::queue_a_microtask(&document, JS::create_heap_function(vm.heap(), [&custom_data, &heap = document.heap()]() {
         // 1. Set the surrounding agent’s mutation observer microtask queued to false.
         custom_data.mutation_observer_microtask_queued = false;
 
         // 2. Let notifySet be a clone of the surrounding agent’s mutation observers.
-        auto notify_set = custom_data.mutation_observers;
+        JS::MarkedVector<DOM::MutationObserver*> notify_set(heap);
+        for (auto& observer : custom_data.mutation_observers)
+            notify_set.append(observer);
 
         // FIXME: 3. Let signalSet be a clone of the surrounding agent’s signal slots.
 
@@ -584,7 +603,7 @@ void queue_mutation_observer_microtask(DOM::Document const& document)
 
                 if (node->registered_observer_list()) {
                     node->registered_observer_list()->remove_all_matching([&mutation_observer](DOM::RegisteredObserver& registered_observer) {
-                        return is<DOM::TransientRegisteredObserver>(registered_observer) && static_cast<DOM::TransientRegisteredObserver&>(registered_observer).observer().ptr() == mutation_observer.ptr();
+                        return is<DOM::TransientRegisteredObserver>(registered_observer) && static_cast<DOM::TransientRegisteredObserver&>(registered_observer).observer().ptr() == mutation_observer;
                     });
                 }
             }
@@ -601,14 +620,14 @@ void queue_mutation_observer_microtask(DOM::Document const& document)
                     MUST(wrapped_records->create_data_property(property_index, record.ptr()));
                 }
 
-                auto result = WebIDL::invoke_callback(callback, mutation_observer.ptr(), wrapped_records, mutation_observer.ptr());
+                auto result = WebIDL::invoke_callback(callback, mutation_observer, wrapped_records, mutation_observer);
                 if (result.is_abrupt())
                     HTML::report_exception(result, realm);
             }
         }
 
         // FIXME: 6. For each slot of signalSet, fire an event named slotchange, with its bubbles attribute set to true, at slot.
-    });
+    }));
 }
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#creating-a-new-javascript-realm

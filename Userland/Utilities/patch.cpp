@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Shannon Booth <shannon@serenityos.org>
+ * Copyright (c) 2023-2024, Shannon Booth <shannon@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -15,6 +15,11 @@
 static bool is_adding_file(Diff::Patch const& patch)
 {
     return patch.hunks[0].location.old_range.start_line == 0;
+}
+
+static bool is_removing_file(Diff::Patch const& patch)
+{
+    return patch.hunks[0].location.new_range.start_line == 0;
 }
 
 static ErrorOr<ByteBuffer> read_content(StringView path_of_file_to_patch, Diff::Patch const& patch)
@@ -34,7 +39,7 @@ static ErrorOr<ByteBuffer> read_content(StringView path_of_file_to_patch, Diff::
     return ByteBuffer {};
 }
 
-static ErrorOr<void> do_patch(StringView path_of_file_to_patch, Diff::Patch const& patch)
+static ErrorOr<void> do_patch(StringView path_of_file_to_patch, Diff::Patch const& patch, Optional<StringView> const& define = {})
 {
     ByteBuffer content = TRY(read_content(path_of_file_to_patch, patch));
     auto lines = StringView(content).lines();
@@ -42,20 +47,33 @@ static ErrorOr<void> do_patch(StringView path_of_file_to_patch, Diff::Patch cons
     // Apply patch to a temporary file in case one or more of the hunks fails.
     char tmp_output[] = "/tmp/patch.XXXXXX";
     auto tmp_file = TRY(Core::File::adopt_fd(TRY(Core::System::mkstemp(tmp_output)), Core::File::OpenMode::ReadWrite));
+    StringView tmp_path { tmp_output, sizeof(tmp_output) };
 
-    TRY(Diff::apply_patch(*tmp_file, lines, patch));
+    TRY(Diff::apply_patch(*tmp_file, lines, patch, define));
 
-    return FileSystem::move_file(path_of_file_to_patch, StringView { tmp_output, sizeof(tmp_output) });
+    // If the patched file ends up being empty, remove it, as the patch was a removal.
+    // Note that we cannot simply rely on the patch successfully applying and the patch claiming it is removing the file
+    // as there may be some trailing garbage at the end of file which was not inside the patch.
+    if (is_removing_file(patch)) {
+        if ((TRY(Core::System::stat(tmp_path))).st_size == 0)
+            return FileSystem::remove(path_of_file_to_patch, FileSystem::RecursionMode::Disallowed);
+
+        outln("Not deleting file {} as content differs from patch", path_of_file_to_patch);
+    }
+
+    return FileSystem::move_file(path_of_file_to_patch, tmp_path);
 }
 
 ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     StringView directory;
+    Optional<StringView> define;
     Optional<size_t> strip_count;
 
     Core::ArgsParser args_parser;
     args_parser.add_option(directory, "Change the working directory to <directory> before applying the patch file", "directory", 'd', "directory");
     args_parser.add_option(strip_count, "Strip given number of leading path components from file names (defaults as basename)", "strip", 'p', "count");
+    args_parser.add_option(define, "Apply merged patch content separated by C preprocessor macros", "ifdef", 'D', "define");
     args_parser.parse(arguments);
 
     if (!directory.is_null())
@@ -73,7 +91,6 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         if (patch.header.format == Diff::Format::Unknown)
             break;
 
-        // FIXME: Support adding/removing a file, and asking for file to patch as fallback otherwise.
         StringView to_patch;
         if (FileSystem::is_regular_file(patch.header.old_file_path)) {
             to_patch = patch.header.old_file_path;
@@ -85,7 +102,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         }
 
         outln("patching file {}", to_patch);
-        TRY(do_patch(to_patch, patch));
+        TRY(do_patch(to_patch, patch, define));
     }
 
     return 0;

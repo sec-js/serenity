@@ -9,6 +9,7 @@
 
 #include <LibWeb/ARIA/Roles.h>
 #include <LibWeb/HTML/HTMLElement.h>
+#include <LibWeb/WebIDL/Types.h>
 
 namespace Web::HTML {
 
@@ -20,8 +21,8 @@ public:
     virtual ~HTMLTableSectionElement() override;
 
     JS::NonnullGCPtr<DOM::HTMLCollection> rows() const;
-    WebIDL::ExceptionOr<JS::NonnullGCPtr<HTMLTableRowElement>> insert_row(long index);
-    WebIDL::ExceptionOr<void> delete_row(long index);
+    WebIDL::ExceptionOr<JS::NonnullGCPtr<HTMLTableRowElement>> insert_row(WebIDL::Long index);
+    WebIDL::ExceptionOr<void> delete_row(WebIDL::Long index);
 
     // https://www.w3.org/TR/html-aria/#el-tbody
     // https://www.w3.org/TR/html-aria/#el-tfoot
@@ -35,6 +36,8 @@ private:
 
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
+
+    virtual void apply_presentational_hints(CSS::StyleProperties&) const override;
 
     JS::GCPtr<DOM::HTMLCollection> mutable m_rows;
 };

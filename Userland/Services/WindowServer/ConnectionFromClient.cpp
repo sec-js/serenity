@@ -5,6 +5,7 @@
  */
 
 #include <AK/Badge.h>
+#include <LibCore/MimeData.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/StandardCursor.h>
 #include <LibGfx/SystemTheme.h>
@@ -67,10 +68,10 @@ ConnectionFromClient::~ConnectionFromClient()
 
     MenuManager::the().close_all_menus_from_client({}, *this);
     auto windows = move(m_windows);
-    for (auto& window : windows) {
-        window.value->detach_client({});
-        if (window.value->type() == WindowType::Applet)
-            AppletManager::the().remove_applet(window.value);
+    for (auto& [_, window] : windows) {
+        window->detach_client({});
+        if (window->type() == WindowType::Applet)
+            AppletManager::the().remove_applet(window);
     }
 
     if (m_show_screen_number)
@@ -105,11 +106,10 @@ void ConnectionFromClient::set_menu_name(i32 menu_id, String const& name)
     }
     auto& menu = *it->value;
     menu.set_name(name);
-    for (auto& it : m_windows) {
-        auto& window = *it.value;
-        window.menubar().for_each_menu([&](Menu& other_menu) {
+    for (auto& [_, window] : m_windows) {
+        window->menubar().for_each_menu([&](Menu& other_menu) {
             if (&menu == &other_menu) {
-                window.invalidate_menubar();
+                window->invalidate_menubar();
                 return IterationDecision::Break;
             }
             return IterationDecision::Continue;
@@ -126,11 +126,10 @@ void ConnectionFromClient::set_menu_minimum_width(i32 menu_id, i32 minimum_width
     }
     auto& menu = *it->value;
     menu.set_minimum_width(minimum_width);
-    for (auto& it : m_windows) {
-        auto& window = *it.value;
-        window.menubar().for_each_menu([&](Menu& other_menu) {
+    for (auto& [_, window] : m_windows) {
+        window->menubar().for_each_menu([&](Menu& other_menu) {
             if (&menu == &other_menu) {
-                window.invalidate_menubar();
+                window->invalidate_menubar();
                 return IterationDecision::Break;
             }
             return IterationDecision::Continue;
@@ -282,7 +281,7 @@ void ConnectionFromClient::flash_menubar_menu(i32 window_id, i32 menu_id)
                 return;
             weak_window->menubar().flash_menu(nullptr);
             weak_window->frame().invalidate_menubar();
-        }).release_value_but_fixme_should_propagate_errors();
+        });
         m_flashed_menu_timer->start();
     } else if (m_flashed_menu_timer) {
         m_flashed_menu_timer->restart();
@@ -1188,7 +1187,7 @@ void ConnectionFromClient::may_have_become_unresponsive()
     async_ping();
     m_ping_timer = Core::Timer::create_single_shot(1000, [this] {
         set_unresponsive(true);
-    }).release_value_but_fixme_should_propagate_errors();
+    });
     m_ping_timer->start();
 }
 

@@ -7,13 +7,16 @@
 #pragma once
 
 #include <LibWeb/Layout/InlineNode.h>
-#include <LibWeb/Painting/PaintableBox.h>
+#include <LibWeb/Painting/ClippableAndScrollable.h>
+#include <LibWeb/Painting/Paintable.h>
 #include <LibWeb/Painting/PaintableFragment.h>
 
 namespace Web::Painting {
 
-class InlinePaintable final : public Paintable {
+class InlinePaintable final : public Paintable
+    , public ClippableAndScrollable {
     JS_CELL(InlinePaintable, Paintable);
+    JS_DECLARE_ALLOCATOR(InlinePaintable);
 
 public:
     static JS::NonnullGCPtr<InlinePaintable> create(Layout::InlineNode const&);
@@ -32,14 +35,18 @@ public:
 
     virtual bool is_inline_paintable() const override { return true; }
 
-    virtual Optional<HitTestResult> hit_test(CSSPixelPoint, HitTestType) const override;
+    virtual TraversalDecision hit_test(CSSPixelPoint, HitTestType, Function<TraversalDecision(HitTestResult)> const& callback) const override;
 
     void set_box_shadow_data(Vector<ShadowData>&& box_shadow_data) { m_box_shadow_data = move(box_shadow_data); }
     Vector<ShadowData> const& box_shadow_data() const { return m_box_shadow_data; }
 
-    void set_scroll_frame_id(int id) { m_scroll_frame_id = id; }
-    void set_enclosing_scroll_frame_offset(CSSPixelPoint offset) { m_enclosing_scroll_frame_offset = offset; }
-    void set_clip_rect(Optional<CSSPixelRect> rect) { m_clip_rect = rect; }
+    void set_outline_data(Optional<BordersData> outline_data) { m_outline_data = outline_data; }
+    Optional<BordersData> const& outline_data() const { return m_outline_data; }
+
+    void set_outline_offset(CSSPixels outline_offset) { m_outline_offset = outline_offset; }
+    CSSPixels outline_offset() const { return m_outline_offset; }
+
+    virtual void resolve_paint_properties() override;
 
 private:
     InlinePaintable(Layout::InlineNode const&);
@@ -47,12 +54,13 @@ private:
     template<typename Callback>
     void for_each_fragment(Callback) const;
 
-    Optional<int> m_scroll_frame_id;
-    Optional<CSSPixelPoint> m_enclosing_scroll_frame_offset;
-    Optional<CSSPixelRect> m_clip_rect;
-
     Vector<ShadowData> m_box_shadow_data;
+    Optional<BordersData> m_outline_data;
+    CSSPixels m_outline_offset { 0 };
     Vector<PaintableFragment> m_fragments;
 };
+
+template<>
+inline bool Paintable::fast_is<InlinePaintable>() const { return is_inline_paintable(); }
 
 }

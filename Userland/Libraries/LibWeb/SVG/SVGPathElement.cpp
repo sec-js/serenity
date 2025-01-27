@@ -7,6 +7,7 @@
 #include <AK/Debug.h>
 #include <AK/Optional.h>
 #include <LibGfx/Path.h>
+#include <LibWeb/Bindings/SVGPathElementPrototype.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/Layout/SVGGeometryBox.h>
@@ -92,17 +93,15 @@ SVGPathElement::SVGPathElement(DOM::Document& document, DOM::QualifiedName quali
 void SVGPathElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::SVGPathElementPrototype>(realm, "SVGPathElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(SVGPathElement);
 }
 
-void SVGPathElement::attribute_changed(FlyString const& name, Optional<String> const& value)
+void SVGPathElement::attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value)
 {
-    SVGGeometryElement::attribute_changed(name, value);
+    SVGGeometryElement::attribute_changed(name, old_value, value);
 
-    if (name == "d") {
+    if (name == "d")
         m_instructions = AttributeParser::parse_path_data(value.value_or(String {}));
-        m_path.clear();
-    }
 }
 
 Gfx::Path path_from_path_instructions(ReadonlySpan<PathInstruction> instructions)
@@ -113,7 +112,7 @@ Gfx::Path path_from_path_instructions(ReadonlySpan<PathInstruction> instructions
 
     for (auto& instruction : instructions) {
         // If the first path element uses relative coordinates, we treat them as absolute by making them relative to (0, 0).
-        auto last_point = path.segments().is_empty() ? Gfx::FloatPoint { 0, 0 } : path.segments().last()->point();
+        auto last_point = path.last_point();
 
         auto& absolute = instruction.absolute;
         auto& data = instruction.data;
@@ -273,12 +272,9 @@ Gfx::Path path_from_path_instructions(ReadonlySpan<PathInstruction> instructions
     return path;
 }
 
-Gfx::Path& SVGPathElement::get_path()
+Gfx::Path SVGPathElement::get_path(CSSPixelSize)
 {
-    if (!m_path.has_value()) {
-        m_path = path_from_path_instructions(m_instructions);
-    }
-    return m_path.value();
+    return path_from_path_instructions(m_instructions);
 }
 
 }

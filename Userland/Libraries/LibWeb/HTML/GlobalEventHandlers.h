@@ -34,6 +34,8 @@
     E(onended, HTML::EventNames::ended)                                       \
     E(onerror, HTML::EventNames::error)                                       \
     E(onfocus, HTML::EventNames::focus)                                       \
+    E(onfocusin, HTML::EventNames::focusin)                                   \
+    E(onfocusout, HTML::EventNames::focusout)                                 \
     E(onformdata, HTML::EventNames::formdata)                                 \
     E(oninput, HTML::EventNames::input)                                       \
     E(oninvalid, HTML::EventNames::invalid)                                   \
@@ -63,6 +65,7 @@
     E(onseeked, HTML::EventNames::seeked)                                     \
     E(onseeking, HTML::EventNames::seeking)                                   \
     E(onselect, HTML::EventNames::select)                                     \
+    E(onselectionchange, HTML::EventNames::selectionchange)                   \
     E(onslotchange, HTML::EventNames::slotchange)                             \
     E(onstalled, HTML::EventNames::stalled)                                   \
     E(onsubmit, HTML::EventNames::submit)                                     \
@@ -91,7 +94,7 @@ public:
 #undef __ENUMERATE
 
 protected:
-    virtual DOM::EventTarget& global_event_handlers_to_event_target(FlyString const& event_name) = 0;
+    virtual JS::GCPtr<DOM::EventTarget> global_event_handlers_to_event_target(FlyString const& event_name) = 0;
 };
 
 }

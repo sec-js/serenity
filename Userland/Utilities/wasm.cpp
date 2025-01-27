@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/GenericLexer.h>
+#include <AK/Hex.h>
 #include <AK/MemoryStream.h>
 #include <AK/StackInfo.h>
 #include <LibCore/ArgsParser.h>
@@ -29,6 +31,11 @@ static void (*old_signal)(int);
 static StackInfo g_stack_info;
 static Wasm::DebuggerBytecodeInterpreter g_interpreter(g_stack_info);
 
+struct ParsedValue {
+    Wasm::Value value;
+    Wasm::ValueType type;
+};
+
 static void sigint_handler(int)
 {
     if (!g_continue) {
@@ -36,6 +43,219 @@ static void sigint_handler(int)
         kill(getpid(), SIGINT);
     }
     g_continue = false;
+}
+
+static Optional<u128> convert_to_uint(StringView string)
+{
+    if (string.is_empty())
+        return {};
+
+    u128 value = 0;
+    auto const characters = string.characters_without_null_termination();
+
+    for (size_t i = 0; i < string.length(); i++) {
+        if (characters[i] < '0' || characters[i] > '9')
+            return {};
+
+        value *= 10;
+        value += u128 { static_cast<u64>(characters[i] - '0'), 0 };
+    }
+    return value;
+}
+
+static Optional<u128> convert_to_uint_from_hex(StringView string)
+{
+    if (string.is_empty())
+        return {};
+
+    u128 value = 0;
+    auto const count = string.length();
+    auto const upper_bound = NumericLimits<u128>::max();
+
+    for (size_t i = 0; i < count; i++) {
+        char digit = string[i];
+        if (value > (upper_bound >> 4))
+            return {};
+
+        auto digit_val = decode_hex_digit(digit);
+        if (digit_val == 255)
+            return {};
+
+        value = (value << 4) + digit_val;
+    }
+    return value;
+}
+
+static ErrorOr<ParsedValue> parse_value(StringView spec)
+{
+    constexpr auto is_sep = [](char c) { return is_ascii_space(c) || c == ':'; };
+    // Scalar: 'T.const[:\s]v' (i32.const 42)
+    auto parse_scalar = []<typename T>(StringView text) -> ErrorOr<Wasm::Value> {
+        if constexpr (IsFloatingPoint<T>) {
+            if (text.trim_whitespace().equals_ignoring_ascii_case("nan"sv)) {
+                if constexpr (IsSame<T, float>)
+                    return Wasm::Value { nanf("") };
+                else
+                    return Wasm::Value { nan("") };
+            }
+            if (text.trim_whitespace().equals_ignoring_ascii_case("inf"sv)) {
+                if constexpr (IsSame<T, float>)
+                    return Wasm::Value { HUGE_VALF };
+                else
+                    return Wasm::Value { HUGE_VAL };
+            }
+        }
+        if (auto v = text.to_number<T>(); v.has_value())
+            return Wasm::Value { *v };
+        return Error::from_string_literal("Invalid scalar value");
+    };
+    // Vector: 'v128.const[:\s]v' (v128.const 0x01000000020000000300000004000000) or 'v(T.const[:\s]v, ...)' (v(i32.const 1, i32.const 2, i32.const 3, i32.const 4))
+    auto parse_u128 = [](StringView text) -> ErrorOr<Wasm::Value> {
+        u128 value;
+        if (text.starts_with("0x"sv)) {
+            if (auto v = convert_to_uint_from_hex(text); v.has_value())
+                value = *v;
+            else
+                return Error::from_string_literal("Invalid hex v128 value");
+        } else {
+            if (auto v = convert_to_uint(text); v.has_value())
+                value = *v;
+            else
+                return Error::from_string_literal("Invalid v128 value");
+        }
+
+        return Wasm::Value { value };
+    };
+
+    GenericLexer lexer(spec);
+    if (lexer.consume_specific("v128.const"sv)) {
+        lexer.ignore_while(is_sep);
+        // The rest of the string is the value
+        auto text = lexer.consume_all();
+        return ParsedValue {
+            .value = TRY(parse_u128(text)),
+            .type = Wasm::ValueType(Wasm::ValueType::Kind::V128)
+        };
+    }
+
+    if (lexer.consume_specific("i8.const"sv)) {
+        lexer.ignore_while(is_sep);
+        auto text = lexer.consume_all();
+        return ParsedValue {
+            .value = TRY(parse_scalar.operator()<i8>(text)),
+            .type = Wasm::ValueType(Wasm::ValueType::Kind::I32)
+        };
+    }
+    if (lexer.consume_specific("i16.const"sv)) {
+        lexer.ignore_while(is_sep);
+        auto text = lexer.consume_all();
+        return ParsedValue {
+            .value = TRY(parse_scalar.operator()<i16>(text)),
+            .type = Wasm::ValueType(Wasm::ValueType::Kind::I32)
+        };
+    }
+    if (lexer.consume_specific("i32.const"sv)) {
+        lexer.ignore_while(is_sep);
+        auto text = lexer.consume_all();
+        return ParsedValue {
+            .value = TRY(parse_scalar.operator()<i32>(text)),
+            .type = Wasm::ValueType(Wasm::ValueType::Kind::I32)
+        };
+    }
+    if (lexer.consume_specific("i64.const"sv)) {
+        lexer.ignore_while(is_sep);
+        auto text = lexer.consume_all();
+        return ParsedValue {
+            .value = TRY(parse_scalar.operator()<i64>(text)),
+            .type = Wasm::ValueType(Wasm::ValueType::Kind::I64)
+        };
+    }
+    if (lexer.consume_specific("f32.const"sv)) {
+        lexer.ignore_while(is_sep);
+        auto text = lexer.consume_all();
+        return ParsedValue {
+            .value = TRY(parse_scalar.operator()<float>(text)),
+            .type = Wasm::ValueType(Wasm::ValueType::Kind::F32)
+        };
+    }
+    if (lexer.consume_specific("f64.const"sv)) {
+        lexer.ignore_while(is_sep);
+        auto text = lexer.consume_all();
+        return ParsedValue {
+            .value = TRY(parse_scalar.operator()<double>(text)),
+            .type = Wasm::ValueType(Wasm::ValueType::Kind::F64)
+        };
+    }
+
+    if (lexer.consume_specific("v("sv)) {
+        Vector<ParsedValue> values;
+        for (;;) {
+            lexer.ignore_while(is_sep);
+            if (lexer.consume_specific(")"sv))
+                break;
+            if (lexer.is_eof()) {
+                warnln("Expected ')' to close vector");
+                break;
+            }
+            auto value = parse_value(lexer.consume_until(is_any_of(",)"sv)));
+            if (value.is_error())
+                return value.release_error();
+            lexer.consume_specific(',');
+            values.append(value.release_value());
+        }
+
+        if (values.is_empty())
+            return Error::from_string_literal("Empty vector");
+
+        auto element_type = values.first().type;
+        for (auto& value : values) {
+            if (value.type != element_type)
+                return Error::from_string_literal("Mixed types in vector");
+        }
+
+        unsigned total_size = 0;
+        unsigned width = 0;
+        u128 result = 0;
+        u128 last_value = 0;
+        for (auto& parsed : values) {
+            if (total_size >= 128)
+                return Error::from_string_literal("Vector too large");
+
+            switch (parsed.type.kind()) {
+            case Wasm::ValueType::F32:
+            case Wasm::ValueType::I32:
+                width = sizeof(u32);
+                break;
+            case Wasm::ValueType::F64:
+            case Wasm::ValueType::I64:
+                width = sizeof(u64);
+                break;
+            case Wasm::ValueType::V128:
+            case Wasm::ValueType::FunctionReference:
+            case Wasm::ValueType::ExternReference:
+                VERIFY_NOT_REACHED();
+            }
+            last_value = parsed.value.value();
+
+            result |= last_value << total_size;
+            total_size += width * 8;
+        }
+
+        if (total_size < 128)
+            warnln("Vector value '{}' is only {} bytes wide, repeating last element", spec, total_size);
+        while (total_size < 128) {
+            // Repeat the last value until we fill the 128 bits
+            result |= last_value << total_size;
+            total_size += width * 8;
+        }
+
+        return ParsedValue {
+            .value = Wasm::Value { result },
+            .type = Wasm::ValueType(Wasm::ValueType::Kind::V128)
+        };
+    }
+
+    return Error::from_string_literal("Invalid value");
 }
 
 static bool post_interpret_hook(Wasm::Configuration&, Wasm::InstructionPointer& ip, Wasm::Instruction const& instr, Wasm::Interpreter const& interpreter)
@@ -57,12 +277,12 @@ static bool pre_interpret_hook(Wasm::Configuration& config, Wasm::InstructionPoi
     if (always_print_stack)
         config.dump_stack();
     if (always_print_instruction) {
-        g_stdout->write_until_depleted(ByteString::formatted("{:0>4} ", ip.value()).bytes()).release_value_but_fixme_should_propagate_errors();
+        g_stdout->write_until_depleted(ByteString::formatted("{:0>4} ", ip.value())).release_value_but_fixme_should_propagate_errors();
         g_printer->print(instr);
     }
     if (g_continue)
         return true;
-    g_stdout->write_until_depleted(ByteString::formatted("{:0>4} ", ip.value()).bytes()).release_value_but_fixme_should_propagate_errors();
+    g_stdout->write_until_depleted(ByteString::formatted("{:0>4} ", ip.value())).release_value_but_fixme_should_propagate_errors();
     g_printer->print(instr);
     ByteString last_command = "";
     for (;;) {
@@ -200,12 +420,31 @@ static bool pre_interpret_hook(Wasm::Configuration& config, Wasm::InstructionPoi
                 warnln("Expected {} arguments for call, but found only {}", type.parameters().size(), args.size() - 2);
                 continue;
             }
-            Vector<u64> values_to_push;
+            Vector<ParsedValue> values_to_push;
             Vector<Wasm::Value> values;
-            for (size_t index = 2; index < args.size(); ++index)
-                values_to_push.append(args[index].to_number<u64>().value_or(0));
-            for (auto& param : type.parameters())
-                values.append(Wasm::Value { param, values_to_push.take_last() });
+            auto ok = true;
+            for (size_t index = 2; index < args.size(); ++index) {
+                auto r = parse_value(args[index]);
+                if (r.is_error()) {
+                    warnln("Failed to parse argument {}: {}", args[index], r.error());
+                    ok = false;
+                    break;
+                }
+                values_to_push.append(r.release_value());
+            }
+            if (!ok)
+                continue;
+            for (auto& param : type.parameters()) {
+                auto v = values_to_push.take_last();
+                if (v.type != param) {
+                    warnln("Type mismatch in argument: expected {}, but got {}", Wasm::ValueType::kind_name(param.kind()), Wasm::ValueType::kind_name(v.type.kind()));
+                    ok = false;
+                    break;
+                }
+                values.append(v.value);
+            }
+            if (!ok)
+                continue;
 
             Wasm::Result result { Wasm::Trap {} };
             {
@@ -217,9 +456,11 @@ static bool pre_interpret_hook(Wasm::Configuration& config, Wasm::InstructionPoi
             } else {
                 if (!result.values().is_empty())
                     warnln("Returned:");
+                size_t index = 0;
                 for (auto& value : result.values()) {
                     g_stdout->write_until_depleted("  -> "sv.bytes()).release_value_but_fixme_should_propagate_errors();
-                    g_printer->print(value);
+                    g_printer->print(value, type.results()[index]);
+                    ++index;
                 }
             }
             continue;
@@ -250,7 +491,7 @@ static bool pre_interpret_hook(Wasm::Configuration& config, Wasm::InstructionPoi
     }
 }
 
-static Optional<Wasm::Module> parse(StringView filename)
+static RefPtr<Wasm::Module> parse(StringView filename)
 {
     auto result = Core::MappedFile::map(filename);
     if (result.is_error()) {
@@ -283,7 +524,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     bool shell_mode = false;
     bool wasi = false;
     ByteString exported_function_to_execute;
-    Vector<u64> values_to_push;
+    Vector<ParsedValue> values_to_push;
     Vector<ByteString> modules_to_link_in;
     Vector<StringView> args_if_wasi;
     Vector<StringView> wasi_preopened_mappings;
@@ -294,7 +535,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     parser.add_option(print, "Print the parsed module", "print", 'p');
     parser.add_option(attempt_instantiate, "Attempt to instantiate the module", "instantiate", 'i');
     parser.add_option(exported_function_to_execute, "Attempt to execute the named exported function from the module (implies -i)", "execute", 'e', "name");
-    parser.add_option(export_all_imports, "Export noop functions corresponding to imports", "export-noop", 0);
+    parser.add_option(export_all_imports, "Export noop functions corresponding to imports", "export-noop");
     parser.add_option(shell_mode, "Launch a REPL in the module's context (implies -i)", "shell", 's');
     parser.add_option(wasi, "Enable WASI", "wasi", 'w');
     parser.add_option(Core::ArgsParser::Option {
@@ -327,16 +568,18 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     });
     parser.add_option(Core::ArgsParser::Option {
         .argument_mode = Core::ArgsParser::OptionArgumentMode::Required,
-        .help_string = "Supply arguments to the function (default=0) (expects u64, casts to required type)",
+        .help_string = "Supply arguments to the function (default=0) (T.const:v or v(T.const:v, ...))",
         .long_name = "arg",
         .short_name = 0,
-        .value_name = "u64",
+        .value_name = "value",
         .accept_value = [&](StringView str) -> bool {
-            if (auto v = str.to_number<u64>(); v.has_value()) {
-                values_to_push.append(v.value());
-                return true;
+            auto result = parse_value(str);
+            if (result.is_error()) {
+                warnln("Failed to parse value: {}", result.error());
+                return false;
             }
-            return false;
+            values_to_push.append(result.release_value());
+            return true;
         },
     });
     parser.add_positional_argument(args_if_wasi, "Arguments to pass to the WASI module", "args", Core::ArgsParser::Required::No);
@@ -360,7 +603,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         attempt_instantiate = true;
 
     auto parse_result = parse(filename);
-    if (!parse_result.has_value())
+    if (parse_result.is_null())
         return 1;
 
     g_stdout = TRY(Core::File::standard_output());
@@ -368,7 +611,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 
     if (print && !attempt_instantiate) {
         Wasm::Printer printer(*g_stdout);
-        printer.print(parse_result.value());
+        printer.print(*parse_result);
     }
 
     if (attempt_instantiate) {
@@ -410,14 +653,14 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 
         // First, resolve the linked modules
         Vector<NonnullOwnPtr<Wasm::ModuleInstance>> linked_instances;
-        Vector<Wasm::Module> linked_modules;
+        Vector<NonnullRefPtr<Wasm::Module>> linked_modules;
         for (auto& name : modules_to_link_in) {
             auto parse_result = parse(name);
-            if (!parse_result.has_value()) {
+            if (parse_result.is_null()) {
                 warnln("Failed to parse linked module '{}'", name);
                 return 1;
             }
-            linked_modules.append(parse_result.release_value());
+            linked_modules.append(parse_result.release_nonnull());
             Wasm::Linker linker { linked_modules.last() };
             for (auto& instance : linked_instances)
                 linker.link(*instance);
@@ -435,7 +678,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
             linked_instances.append(instantiation_result.release_value());
         }
 
-        Wasm::Linker linker { parse_result.value() };
+        Wasm::Linker linker { *parse_result };
         for (auto& instance : linked_instances)
             linker.link(*instance);
 
@@ -461,30 +704,33 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
             for (auto& entry : linker.unresolved_imports()) {
                 if (!entry.type.has<Wasm::TypeIndex>())
                     continue;
-                auto type = parse_result.value().type(entry.type.get<Wasm::TypeIndex>());
+                auto type = parse_result->type_section().types()[entry.type.get<Wasm::TypeIndex>().value()];
                 auto address = machine.store().allocate(Wasm::HostFunction(
                     [name = entry.name, type = type](auto&, auto& arguments) -> Wasm::Result {
                         StringBuilder argument_builder;
                         bool first = true;
+                        size_t index = 0;
                         for (auto& argument : arguments) {
                             AllocatingMemoryStream stream;
-                            Wasm::Printer { stream }.print(argument);
+                            auto value_type = type.parameters()[index];
+                            Wasm::Printer { stream }.print(argument, value_type);
                             if (first)
                                 first = false;
                             else
                                 argument_builder.append(", "sv);
-                            auto buffer = ByteBuffer::create_uninitialized(stream.used_buffer_size()).release_value_but_fixme_should_propagate_errors();
-                            stream.read_until_filled(buffer).release_value_but_fixme_should_propagate_errors();
+                            auto buffer = stream.read_until_eof().release_value_but_fixme_should_propagate_errors();
                             argument_builder.append(StringView(buffer).trim_whitespace());
+                            ++index;
                         }
                         dbgln("[wasm runtime] Stub function {} was called with the following arguments: {}", name, argument_builder.to_byte_string());
                         Vector<Wasm::Value> result;
                         result.ensure_capacity(type.results().size());
-                        for (auto& result_type : type.results())
-                            result.append(Wasm::Value { result_type, 0ull });
+                        for (size_t i = 0; i < type.results().size(); ++i)
+                            result.append(Wasm::Value());
                         return Wasm::Result { move(result) };
                     },
-                    type));
+                    type,
+                    entry.name));
                 exports.set(entry, *address);
             }
 
@@ -497,7 +743,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
             print_link_error(link_result.error());
             return 1;
         }
-        auto result = machine.instantiate(parse_result.value(), link_result.release_value());
+        auto result = machine.instantiate(*parse_result, link_result.release_value());
         if (result.is_error()) {
             warnln("Module instantiation failed: {}", result.error().error);
             return 1;
@@ -521,15 +767,15 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 
         auto print_func = [&](auto const& address) {
             Wasm::FunctionInstance* fn = machine.store().get(address);
-            g_stdout->write_until_depleted(ByteString::formatted("- Function with address {}, ptr = {}\n", address.value(), fn).bytes()).release_value_but_fixme_should_propagate_errors();
+            g_stdout->write_until_depleted(ByteString::formatted("- Function with address {}, ptr = {}\n", address.value(), fn)).release_value_but_fixme_should_propagate_errors();
             if (fn) {
-                g_stdout->write_until_depleted(ByteString::formatted("    wasm function? {}\n", fn->has<Wasm::WasmFunction>()).bytes()).release_value_but_fixme_should_propagate_errors();
+                g_stdout->write_until_depleted(ByteString::formatted("    wasm function? {}\n", fn->has<Wasm::WasmFunction>())).release_value_but_fixme_should_propagate_errors();
                 fn->visit(
                     [&](Wasm::WasmFunction const& func) {
                         Wasm::Printer printer { *g_stdout, 3 };
-                        g_stdout->write_until_depleted("    type:\n"sv.bytes()).release_value_but_fixme_should_propagate_errors();
+                        g_stdout->write_until_depleted("    type:\n"sv).release_value_but_fixme_should_propagate_errors();
                         printer.print(func.type());
-                        g_stdout->write_until_depleted("    code:\n"sv.bytes()).release_value_but_fixme_should_propagate_errors();
+                        g_stdout->write_until_depleted("    code:\n"sv).release_value_but_fixme_should_propagate_errors();
                         printer.print(func.code());
                     },
                     [](Wasm::HostFunction const&) {});
@@ -570,10 +816,14 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
             }
 
             for (auto& param : instance->get<Wasm::WasmFunction>().type().parameters()) {
-                if (values_to_push.is_empty())
-                    values.append(Wasm::Value { param, 0ull });
-                else
-                    values.append(Wasm::Value { param, values_to_push.take_last() });
+                if (values_to_push.is_empty()) {
+                    values.append(Wasm::Value());
+                } else if (param == values_to_push.last().type) {
+                    values.append(values_to_push.take_last().value);
+                } else {
+                    warnln("Type mismatch in argument: expected {}, but got {}", Wasm::ValueType::kind_name(param.kind()), Wasm::ValueType::kind_name(values_to_push.last().type.kind()));
+                    return 1;
+                }
             }
 
             if (print) {
@@ -588,13 +838,18 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
                 launch_repl();
 
             if (result.is_trap()) {
+                if (result.trap().reason.starts_with("exit:"sv))
+                    return -result.trap().reason.substring_view(5).to_number<i32>().value_or(-1);
                 warnln("Execution trapped: {}", result.trap().reason);
             } else {
                 if (!result.values().is_empty())
                     warnln("Returned:");
+                auto result_type = instance->get<Wasm::WasmFunction>().type().results();
+                size_t index = 0;
                 for (auto& value : result.values()) {
                     g_stdout->write_until_depleted("  -> "sv.bytes()).release_value_but_fixme_should_propagate_errors();
-                    g_printer->print(value);
+                    g_printer->print(value, result_type[index]);
+                    ++index;
                 }
             }
         }

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/CircularDeque.h>
+#include <Kernel/API/MajorNumberAllocation.h>
 #include <Kernel/Devices/CharacterDevice.h>
 #include <Kernel/Library/DoubleBuffer.h>
 #include <Kernel/Library/LockWeakPtr.h>
@@ -37,7 +38,6 @@ public:
         return 0;
     }
 
-    ErrorOr<void> set_termios(termios const&);
     bool should_generate_signals() const { return (m_termios.c_lflag & ISIG) == ISIG; }
     bool should_flush_on_signal() const { return (m_termios.c_lflag & NOFLSH) != NOFLSH; }
     bool should_echo_input() const { return (m_termios.c_lflag & ECHO) == ECHO; }
@@ -52,7 +52,7 @@ protected:
     virtual ErrorOr<size_t> on_tty_write(UserOrKernelBuffer const&, size_t) = 0;
     void set_size(unsigned short columns, unsigned short rows);
 
-    TTY(MajorNumber major, MinorNumber minor);
+    TTY(MajorAllocation::CharacterDeviceFamily, MinorNumber minor);
     void emit(u8, bool do_evaluate_block_conditions = false);
     void echo_with_processing(u8);
 
@@ -78,6 +78,7 @@ private:
     virtual bool is_tty() const final override { return true; }
 
     virtual void echo(u8) = 0;
+    ErrorOr<void> set_termios(OpenFileDescription&, termios const&);
 
     template<typename Functor>
     void process_output(u8, Functor put_char);

@@ -5,6 +5,7 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/MimeTypePrototype.h>
 #include <LibWeb/HTML/MimeType.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Window.h>
@@ -24,7 +25,7 @@ MimeType::~MimeType() = default;
 void MimeType::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::MimeTypePrototype>(realm, "MimeType"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(MimeType);
 }
 
 // https://html.spec.whatwg.org/multipage/system-state.html#concept-mimetype-type

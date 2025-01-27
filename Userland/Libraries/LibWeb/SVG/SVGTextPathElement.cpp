@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/URL.h>
+#include <LibURL/URL.h>
+#include <LibWeb/Bindings/SVGTextPathElementPrototype.h>
 #include <LibWeb/Layout/SVGTextPathBox.h>
 #include <LibWeb/SVG/AttributeNames.h>
 #include <LibWeb/SVG/SVGTextPathElement.h>
@@ -30,7 +31,7 @@ JS::GCPtr<SVGGeometryElement const> SVGTextPathElement::path_or_shape() const
 void SVGTextPathElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::SVGTextPathElementPrototype>(realm, "SVGTextPathElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(SVGTextPathElement);
 }
 
 void SVGTextPathElement::visit_edges(Cell::Visitor& visitor)

@@ -155,6 +155,20 @@ public:
     ALWAYS_INLINE VisibleType const& operator[](size_t i) const { return at(i); }
     ALWAYS_INLINE VisibleType& operator[](size_t i) { return at(i); }
 
+    Optional<VisibleType&> get(size_t i)
+    {
+        if (i >= size())
+            return {};
+        return at(i);
+    }
+
+    Optional<VisibleType const&> get(size_t i) const
+    {
+        if (i >= size())
+            return {};
+        return at(i);
+    }
+
     VisibleType const& first() const { return at(0); }
     VisibleType& first() { return at(0); }
 
@@ -810,8 +824,6 @@ public:
         for (size_t i = 0; i < size() / 2; ++i)
             AK::swap(at(i), at(size() - i - 1));
     }
-
-    static FlatPtr outline_buffer_offset() { return OFFSET_OF(Vector, m_outline_buffer); }
 
 private:
     void reset_capacity()

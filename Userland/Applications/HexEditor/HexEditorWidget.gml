@@ -20,24 +20,50 @@
             name: "editor"
         }
 
-        @GUI::VerticalSplitter {
+        @GUI::DynamicWidgetContainer {
             name: "side_panel_container"
             visible: false
+            section_label: "Panels"
+            config_domain: "HexEditor"
+            preferred_height: "grow"
+            show_controls: false
 
-            @GUI::Widget {
+            @GUI::DynamicWidgetContainer {
                 name: "search_results_container"
+                section_label: "Search Results"
+                config_domain: "HexEditor"
+                preferred_height: "grow"
                 visible: false
-                layout: @GUI::VerticalBoxLayout {}
 
                 @GUI::TableView {
                     name: "search_results"
                 }
             }
 
-            @GUI::Widget {
+            @GUI::DynamicWidgetContainer {
                 name: "value_inspector_container"
+                section_label: "Value Inspector"
+                config_domain: "HexEditor"
+                preferred_height: "grow"
                 visible: false
-                layout: @GUI::VerticalBoxLayout {}
+
+                @GUI::ToolbarContainer {
+                    name: "value_inspector_toolbar_container"
+
+                    @GUI::Toolbar {
+                        name: "value_inspector_toolbar"
+
+                        @GUI::Label {
+                            text: "Mode:"
+                            preferred_width: 40
+                        }
+
+                        @GUI::ComboBox {
+                            name: "value_inspector_endianness"
+                            preferred_width: 120
+                        }
+                    }
+                }
 
                 @GUI::TableView {
                     name: "value_inspector"
@@ -45,10 +71,20 @@
                 }
             }
 
-            @GUI::Widget {
+            @GUI::DynamicWidgetContainer {
                 name: "annotations_container"
+                section_label: "Annotations"
+                config_domain: "HexEditor"
+                preferred_height: "grow"
                 visible: false
-                layout: @GUI::VerticalBoxLayout {}
+
+                @GUI::ToolbarContainer {
+                    name: "annotations_toolbar_container"
+
+                    @GUI::Toolbar {
+                        name: "annotations_toolbar"
+                    }
+                }
 
                 @GUI::TableView {
                     name: "annotations"

@@ -139,15 +139,15 @@
     __JS_ENUMERATE(toStringTag, to_string_tag)               \
     __JS_ENUMERATE(dispose, dispose)
 
-#define JS_ENUMERATE_REGEXP_FLAGS                \
-    __JS_ENUMERATE(hasIndices, has_indices, d)   \
-    __JS_ENUMERATE(global, global, g)            \
-    __JS_ENUMERATE(ignoreCase, ignore_case, i)   \
-    __JS_ENUMERATE(multiline, multiline, m)      \
-    __JS_ENUMERATE(dotAll, dot_all, s)           \
-    __JS_ENUMERATE(unicodeSets, unicode_sets, v) \
-    __JS_ENUMERATE(unicode, unicode, u)          \
-    __JS_ENUMERATE(sticky, sticky, y)
+#define JS_ENUMERATE_REGEXP_FLAGS                             \
+    __JS_ENUMERATE(HasIndices, hasIndices, has_indices, d)    \
+    __JS_ENUMERATE(Global, global, global, g)                 \
+    __JS_ENUMERATE(IgnoreCase, ignoreCase, ignore_case, i)    \
+    __JS_ENUMERATE(Multiline, multiline, multiline, m)        \
+    __JS_ENUMERATE(DotAll, dotAll, dot_all, s)                \
+    __JS_ENUMERATE(UnicodeSets, unicodeSets, unicode_sets, v) \
+    __JS_ENUMERATE(Unicode, unicode, unicode, u)              \
+    __JS_ENUMERATE(Sticky, sticky, sticky, y)
 
 namespace JS {
 
@@ -217,12 +217,13 @@ class Symbol;
 class Token;
 class Utf16String;
 class VM;
+class PrototypeChainValidity;
 class Value;
 class WeakContainer;
 class WrappedFunction;
 enum class DeclarationKind;
 struct AlreadyResolved;
-struct JobCallback;
+class JobCallback;
 struct ModuleRequest;
 struct ModuleWithSpecifier;
 
@@ -288,11 +289,16 @@ namespace Temporal {
 JS_ENUMERATE_TEMPORAL_OBJECTS
 #undef __JS_ENUMERATE
 class Temporal;
+struct CalendarMethods;
 struct DurationRecord;
 struct DateDurationRecord;
 struct TimeDurationRecord;
+struct TimeZoneMethods;
 struct PartialDurationRecord;
 };
+
+template<typename T>
+class HeapFunction;
 
 template<typename T>
 requires(!IsLvalueReference<T>)
@@ -302,15 +308,19 @@ template<class T>
 class Handle;
 
 template<class T, size_t inline_capacity = 0>
+class ConservativeVector;
+
+template<class T, size_t inline_capacity = 0>
 class MarkedVector;
 
 namespace Bytecode {
 class BasicBlock;
-enum class Builtin;
+enum class Builtin : u8;
 class Executable;
 class Generator;
 class Instruction;
 class Interpreter;
+class Operand;
 class RegexTable;
 class Register;
 }

@@ -44,44 +44,72 @@ PDFErrorOr<void> Type1Font::initialize(Document* document, NonnullRefPtr<DictObj
             m_font_program = TRY(PS1FontProgram::create(font_file_stream->bytes(), encoding(), length1, length2));
         }
     }
+
+    if (m_font_program && m_font_program->kind() == Type1FontProgram::Kind::CIDKeyed)
+        return Error::parse_error("Type1 fonts must not be CID-keyed"sv);
+
     if (!m_font_program) {
-        m_font = TRY(replacement_for(base_font_name().to_lowercase(), font_size));
+        // NOTE: We use this both for the 14 built-in fonts and for replacement fonts.
+        // We should probably separate these two cases.
+        auto font = TRY(replacement_for(base_font_name().to_lowercase(), font_size));
+
+        auto effective_encoding = encoding();
+        bool is_standard_14_font = base_font_name() == "Helvetica" || base_font_name() == "Helvetica-Bold" || base_font_name() == "Helvetica-Oblique" || base_font_name() == "Helvetica-BoldOblique"
+            || base_font_name() == "Times-Roman" || base_font_name() == "Times-Bold" || base_font_name() == "Times-Italic" || base_font_name() == "Times-BoldItalic"
+            || base_font_name() == "Courier" || base_font_name() == "Courier-Bold" || base_font_name() == "Courier-Oblique" || base_font_name() == "Courier-BoldOblique"
+            || base_font_name() == "Symbol" || base_font_name() == "ZapfDingbats";
+        if (!effective_encoding) {
+            // PDF 1.7 spec, APPENDIX D Character Sets and Encodings
+            // "Sections D.4, “Symbol Set and Encoding,” and D.5, “ZapfDingbats Set and Encoding,”
+            //  describe the character sets and built-in encodings for the Symbol and ZapfDingbats (ITC Zapf Dingbats)
+            //  font programs, which are among the standard 14 predefined fonts. These fonts have built-in encodings
+            //  that are unique to each font. (The characters for ZapfDingbats are ordered by code instead of by name,
+            //  since the names in that font are meaningless.)"
+            // FIXME: We use Liberation Sans for both Symbol and ZapfDingbats. It doesn't have all Symbol
+            //        characters, or at least not under the codepoints used in AdobeGlpyhList. It doesn't
+            //        have most of the ZapfDingbats characters. Not sure what to do about this -- we might need a different font.
+            //        (For Helvetica / Times / Courier, the Liberation family also doesn't have the right metrics.)
+            if (base_font_name() == "Symbol"sv)
+                effective_encoding = Encoding::symbol_encoding();
+            else if (base_font_name() == "ZapfDingbats"sv)
+                effective_encoding = Encoding::zapf_encoding();
+            else
+                effective_encoding = Encoding::standard_encoding();
+        }
+
+        if (is_standard_14_font) {
+            // We use the Liberation fonts as a replacement for the standard 14 fonts, and they're all non-symbolic.
+            m_flags = (m_flags | NonSymbolic) & ~Symbolic;
+
+            // FIXME: Set more m_flags bits (symbolic/nonsymbolic, italic, bold, fixed pitch, serif).
+        }
+
+        m_fallback_font_painter = TrueTypePainter::create(document, dict, *this, *font, *effective_encoding, base_font_name() == "ZapfDingbats"sv);
     }
 
-    VERIFY(m_font_program || m_font);
+    VERIFY(m_font_program || m_fallback_font_painter);
     return {};
 }
 
 Optional<float> Type1Font::get_glyph_width(u8 char_code) const
 {
-    if (m_font)
-        return m_font->glyph_width(char_code);
+    if (m_fallback_font_painter)
+        return m_fallback_font_painter->get_glyph_width(char_code);
     return OptionalNone {};
 }
 
 void Type1Font::set_font_size(float font_size)
 {
-    if (m_font)
-        m_font = m_font->with_size((font_size * POINTS_PER_INCH) / DEFAULT_DPI);
+    if (m_fallback_font_painter)
+        m_fallback_font_painter->set_font_size(font_size);
 }
 
 PDFErrorOr<void> Type1Font::draw_glyph(Gfx::Painter& painter, Gfx::FloatPoint point, float width, u8 char_code, Renderer const& renderer)
 {
     auto style = renderer.state().paint_style;
 
-    if (!m_font_program) {
-        // Undo shift in Glyf::Glyph::append_simple_path() via OpenType::Font::rasterize_glyph().
-        auto position = point.translated(0, -m_font->pixel_metrics().ascent);
-        // FIXME: Bounding box and sample point look to be pretty wrong
-        if (style.has<Color>()) {
-            painter.draw_glyph(position, char_code, *m_font, style.get<Color>());
-        } else {
-            style.get<NonnullRefPtr<Gfx::PaintStyle>>()->paint(Gfx::IntRect(position.x(), position.y(), width, 0), [&](auto sample) {
-                painter.draw_glyph(position, char_code, *m_font, sample(Gfx::IntPoint(position.x(), position.y())));
-            });
-        }
-        return {};
-    }
+    if (!m_font_program)
+        return m_fallback_font_painter->draw_glyph(painter, point, width, char_code, renderer);
 
     auto effective_encoding = encoding();
     if (!effective_encoding)

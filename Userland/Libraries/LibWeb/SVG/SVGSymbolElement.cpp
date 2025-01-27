@@ -5,13 +5,15 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/SVGSymbolElementPrototype.h>
 #include <LibWeb/CSS/StyleProperties.h>
+#include <LibWeb/CSS/StyleValues/CSSKeywordValue.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
-#include <LibWeb/CSS/StyleValues/IdentifierStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ShorthandStyleValue.h>
 #include <LibWeb/DOM/ShadowRoot.h>
-#include <LibWeb/Layout/Box.h>
+#include <LibWeb/Layout/SVGGraphicsBox.h>
 #include <LibWeb/SVG/AttributeNames.h>
+#include <LibWeb/SVG/SVGAnimatedRect.h>
 #include <LibWeb/SVG/SVGSymbolElement.h>
 #include <LibWeb/SVG/SVGUseElement.h>
 
@@ -27,7 +29,14 @@ SVGSymbolElement::SVGSymbolElement(DOM::Document& document, DOM::QualifiedName q
 void SVGSymbolElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::SVGSymbolElementPrototype>(realm, "SVGSymbolElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(SVGSymbolElement);
+    m_view_box_for_bindings = heap().allocate<SVGAnimatedRect>(realm, realm);
+}
+
+void SVGSymbolElement::visit_edges(Cell::Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(m_view_box_for_bindings);
 }
 
 // https://svgwg.org/svg2-draft/struct.html#SymbolNotes
@@ -41,11 +50,17 @@ void SVGSymbolElement::apply_presentational_hints(CSS::StyleProperties& style) c
     }
 }
 
-void SVGSymbolElement::attribute_changed(FlyString const& name, Optional<String> const& value)
+void SVGSymbolElement::attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value)
 {
-    Base::attribute_changed(name, value);
-    if (name.equals_ignoring_ascii_case(SVG::AttributeNames::viewBox))
+    Base::attribute_changed(name, old_value, value);
+    if (name.equals_ignoring_ascii_case(SVG::AttributeNames::viewBox)) {
         m_view_box = try_parse_view_box(value.value_or(String {}));
+        m_view_box_for_bindings->set_nulled(!m_view_box.has_value());
+        if (m_view_box.has_value()) {
+            m_view_box_for_bindings->set_base_val(Gfx::DoubleRect { m_view_box->min_x, m_view_box->min_y, m_view_box->width, m_view_box->height });
+            m_view_box_for_bindings->set_anim_val(Gfx::DoubleRect { m_view_box->min_x, m_view_box->min_y, m_view_box->width, m_view_box->height });
+        }
+    }
 }
 
 bool SVGSymbolElement::is_direct_child_of_use_shadow_tree() const
@@ -61,7 +76,7 @@ bool SVGSymbolElement::is_direct_child_of_use_shadow_tree() const
 
 JS::GCPtr<Layout::Node> SVGSymbolElement::create_layout_node(NonnullRefPtr<CSS::StyleProperties> style)
 {
-    return heap().allocate_without_realm<Layout::Box>(document(), this, move(style));
+    return heap().allocate_without_realm<Layout::SVGGraphicsBox>(document(), *this, move(style));
 }
 
 }

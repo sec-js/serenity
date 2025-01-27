@@ -6,6 +6,7 @@
 
 #include <AK/String.h>
 #include <AK/StringView.h>
+#include <AK/TypeCasts.h>
 #include <LibGfx/Font/FontDatabase.h>
 #include <LibPDF/CommonNames.h>
 #include <LibPDF/Fonts/PDFFont.h>
@@ -55,15 +56,21 @@ PDFErrorOr<NonnullRefPtr<PDFFont>> PDFFont::create(Document* document, NonnullRe
     return font.release_nonnull();
 }
 
-PDFErrorOr<void> PDFFont::initialize(Document*, NonnullRefPtr<DictObject> const&, float)
+PDFErrorOr<void> PDFFont::initialize(Document* document, NonnullRefPtr<DictObject> const& dict, float)
 {
+    if (dict->contains(CommonNames::FontDescriptor)) {
+        auto descriptor = TRY(dict->get_dict(document, CommonNames::FontDescriptor));
+        if (descriptor->contains(CommonNames::Flags))
+            m_flags = descriptor->get_value(CommonNames::Flags).to_int();
+    }
+
     return {};
 }
 
-PDFErrorOr<NonnullRefPtr<Gfx::Font>> PDFFont::replacement_for(StringView name, float font_size)
+PDFErrorOr<NonnullRefPtr<Gfx::ScaledFont>> PDFFont::replacement_for(StringView name, float font_size)
 {
     bool is_bold = name.contains("bold"sv, CaseSensitivity::CaseInsensitive);
-    bool is_italic = name.contains("italic"sv, CaseSensitivity::CaseInsensitive);
+    bool is_italic = name.contains("italic"sv, CaseSensitivity::CaseInsensitive) || name.contains("oblique"sv, CaseSensitivity::CaseInsensitive);
 
     FlyString font_family;
     if (name.contains("times"sv, CaseSensitivity::CaseInsensitive)) {
@@ -90,7 +97,9 @@ PDFErrorOr<NonnullRefPtr<Gfx::Font>> PDFFont::replacement_for(StringView name, f
     auto font = Gfx::FontDatabase::the().get(font_family, font_variant, point_size);
     if (!font)
         return Error::internal_error("Failed to load {} {} at {}pt", font_family, font_variant, point_size);
-    return font.release_nonnull();
+
+    VERIFY(is<Gfx::ScaledFont>(*font));
+    return static_ptr_cast<Gfx::ScaledFont>(font.release_nonnull());
 }
 
 }

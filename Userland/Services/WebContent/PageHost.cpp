@@ -19,7 +19,7 @@ PageHost::PageHost(ConnectionFromClient& client)
     : m_client(client)
 {
     auto& first_page = create_page();
-    first_page.page().set_top_level_traversable(Web::HTML::TraversableNavigable::create_a_fresh_top_level_traversable(first_page.page(), AK::URL("about:blank")).release_value_but_fixme_should_propagate_errors());
+    Web::HTML::TraversableNavigable::create_a_fresh_top_level_traversable(first_page.page(), URL::URL("about:blank")).release_value_but_fixme_should_propagate_errors();
 }
 
 PageClient& PageHost::create_page()
@@ -27,6 +27,18 @@ PageClient& PageHost::create_page()
     m_pages.set(m_next_id, PageClient::create(Web::Bindings::main_thread_vm(), *this, m_next_id));
     ++m_next_id;
     return *m_pages.get(m_next_id - 1).value();
+}
+
+void PageHost::remove_page(Badge<PageClient>, u64 index)
+{
+    m_pages.remove(index);
+}
+
+Optional<PageClient&> PageHost::page(u64 index)
+{
+    return m_pages.get(index).map([](auto& value) -> PageClient& {
+        return *value;
+    });
 }
 
 PageHost::~PageHost() = default;

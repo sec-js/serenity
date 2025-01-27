@@ -6,6 +6,7 @@
  */
 
 #include "PDFViewerWidget.h"
+#include "ThumbnailsModel.h"
 #include <AK/Assertions.h>
 #include <AK/ByteString.h>
 #include <AK/Format.h>
@@ -28,6 +29,8 @@
 #include <LibGUI/TableView.h>
 #include <LibGUI/Toolbar.h>
 #include <LibGUI/ToolbarContainer.h>
+#include <LibGfx/Bitmap.h>
+#include <LibGfx/Color.h>
 #include <LibPDF/Document.h>
 
 class PagedErrorsModel : public GUI::Model {
@@ -180,28 +183,33 @@ PDFViewerWidget::PDFViewerWidget()
             return;
         auto page = maybe_page.release_value();
         m_viewer->set_current_page(page);
+        m_page_text_box->set_value(m_viewer->current_page() + 1);
     };
 
-    auto& v_splitter = h_splitter.add<GUI::VerticalSplitter>();
-    v_splitter.layout()->set_spacing(4);
+    m_vertical_splitter = h_splitter.add<GUI::VerticalSplitter>();
+    m_vertical_splitter->layout()->set_spacing(4);
 
-    m_viewer = v_splitter.add<PDFViewer>();
+    m_viewer = m_vertical_splitter->add<PDFViewer>();
     m_viewer->on_page_change = [&](auto new_page) {
         m_page_text_box->set_value(new_page + 1, GUI::AllowCallback::No);
         m_go_to_prev_page_action->set_enabled(new_page > 0);
         m_go_to_next_page_action->set_enabled(new_page < m_viewer->document()->get_page_count() - 1);
     };
     m_viewer->on_render_errors = [&](u32 page, PDF::Errors const& errors) {
-        verify_cast<PagedErrorsModel>(m_paged_errors_model.ptr())->add_errors(page, errors);
+        m_paged_errors_model->add_errors(page, errors);
     };
 
-    m_errors_tree_view = v_splitter.add<GUI::TreeView>();
+    m_errors_tree_view = GUI::TreeView::construct();
     m_errors_tree_view->set_preferred_height(10);
     m_errors_tree_view->column_header().set_visible(true);
     m_errors_tree_view->set_should_fill_selected_rows(true);
     m_errors_tree_view->set_selection_behavior(GUI::AbstractView::SelectionBehavior::SelectRows);
     m_errors_tree_view->set_model(MUST(GUI::SortingProxyModel::create(m_paged_errors_model)));
     m_errors_tree_view->set_key_column(0);
+
+    if (m_viewer->show_rendering_diagnostics()) {
+        m_vertical_splitter->add_child(*m_errors_tree_view);
+    }
 
     initialize_toolbar(toolbar);
 }
@@ -247,6 +255,16 @@ ErrorOr<void> PDFViewerWidget::initialize_menubar(GUI::Window& window)
     }));
 
     auto debug_menu = window.add_menu("&Debug"_string);
+    auto toggle_show_diagnostics = GUI::Action::create_checkable("Show Rendering &Diagnostics", [&](auto& action) {
+        if (action.is_checked()) {
+            m_vertical_splitter->add_child(*m_errors_tree_view);
+        } else {
+            m_vertical_splitter->remove_child(*m_errors_tree_view);
+        }
+        m_viewer->set_show_rendering_diagnostics(action.is_checked());
+    });
+    toggle_show_diagnostics->set_checked(m_viewer->show_rendering_diagnostics());
+    debug_menu->add_action(toggle_show_diagnostics);
     auto toggle_show_clipping_paths = GUI::Action::create_checkable("Show &Clipping Paths", [&](auto& action) {
         m_viewer->set_show_clipping_paths(action.is_checked());
     });
@@ -257,6 +275,11 @@ ErrorOr<void> PDFViewerWidget::initialize_menubar(GUI::Window& window)
     });
     toggle_show_images->set_checked(m_viewer->show_images());
     debug_menu->add_action(toggle_show_images);
+    auto toggle_show_hidden_text = GUI::Action::create_checkable("Show &Hidden Text", [&](auto& action) {
+        m_viewer->set_show_hidden_text(action.is_checked());
+    });
+    toggle_show_hidden_text->set_checked(m_viewer->show_hidden_text());
+    debug_menu->add_action(toggle_show_hidden_text);
     auto toggle_clip_images = GUI::Action::create_checkable("Clip I&mages", [&](auto& action) {
         m_viewer->set_clip_images(action.is_checked());
     });
@@ -277,6 +300,41 @@ ErrorOr<void> PDFViewerWidget::initialize_menubar(GUI::Window& window)
     help_menu->add_action(GUI::CommonActions::make_command_palette_action(&window));
     help_menu->add_action(GUI::CommonActions::make_about_action("PDF Viewer"_string, GUI::Icon::default_icon("app-pdf-viewer"sv), &window));
     return {};
+}
+
+NonnullRefPtr<Gfx::Bitmap const> PDFViewerWidget::render_thumbnail_for_rendered_page(u32 page_index)
+{
+    int rect_square_size = 96;
+    Gfx::IntSize thumbnail_size(0, 0);
+    auto rendered_page = m_viewer->get_rendered_page(page_index).value();
+
+    float width_mult = rect_square_size / float(rendered_page->width());
+    float height_mult = rect_square_size / float(rendered_page->height());
+    float resolved_mult = rendered_page->width() < rendered_page->height() ? height_mult : width_mult;
+
+    thumbnail_size.set_width(rendered_page->width() * resolved_mult);
+    thumbnail_size.set_height(rendered_page->height() * resolved_mult);
+
+    return rendered_page->scaled_to_size(thumbnail_size).release_value_but_fixme_should_propagate_errors();
+}
+
+void PDFViewerWidget::reset_thumbnails()
+{
+    auto model = m_sidebar->thumbnails_list_view()->model();
+    (void)static_cast<ThumbnailsModel*>(model)->reset_thumbnails(m_viewer->document()->get_page_count());
+}
+
+void PDFViewerWidget::select_thumbnail(u32 page_index)
+{
+    m_sidebar->thumbnails_list_view()->select_list_item(page_index);
+}
+
+NonnullRefPtr<Gfx::Bitmap const> PDFViewerWidget::update_thumbnail_for_page(u32 page_index)
+{
+    auto model = m_sidebar->thumbnails_list_view()->model();
+    auto thumbnail = render_thumbnail_for_rendered_page(page_index);
+    static_cast<ThumbnailsModel*>(model)->update_thumbnail(page_index, thumbnail);
+    return thumbnail;
 }
 
 void PDFViewerWidget::initialize_toolbar(GUI::Toolbar& toolbar)
@@ -320,6 +378,7 @@ void PDFViewerWidget::initialize_toolbar(GUI::Toolbar& toolbar)
         m_viewer->set_current_page(new_page_number - 1);
         m_go_to_prev_page_action->set_enabled(new_page_number > 1);
         m_go_to_next_page_action->set_enabled(new_page_number < page_count);
+        select_thumbnail(m_viewer->current_page());
     };
 
     m_total_page_label = toolbar.add<GUI::Label>();
@@ -340,10 +399,12 @@ void PDFViewerWidget::initialize_toolbar(GUI::Toolbar& toolbar)
 
     m_rotate_counterclockwise_action = GUI::CommonActions::make_rotate_counterclockwise_action([&](auto&) {
         m_viewer->rotate(-90);
+        reset_thumbnails();
     });
 
     m_rotate_clockwise_action = GUI::CommonActions::make_rotate_clockwise_action([&](auto&) {
         m_viewer->rotate(90);
+        reset_thumbnails();
     });
 
     m_zoom_in_action->set_enabled(false);
@@ -441,6 +502,20 @@ PDF::PDFErrorOr<void> PDFViewerWidget::try_open_file(StringView path, NonnullOwn
         m_sidebar_open = false;
     }
 
+    auto thumbnails_model = ThumbnailsModel::create();
+    m_sidebar->thumbnails_list_view()->set_model(thumbnails_model);
+    reset_thumbnails();
+
+    m_sidebar->thumbnails_list_view()->on_selection_change = [this] {
+        auto page_index = m_sidebar->thumbnails_list_view()->selection().first().row();
+        if (page_index >= 0) {
+            m_viewer->set_current_page(page_index);
+            m_page_text_box->set_value(page_index + 1);
+        }
+    };
+
+    select_thumbnail(m_viewer->current_page());
+
     GUI::Application::the()->set_most_recently_open_file(path);
 
     return {};
@@ -448,8 +523,7 @@ PDF::PDFErrorOr<void> PDFViewerWidget::try_open_file(StringView path, NonnullOwn
 
 void PDFViewerWidget::drag_enter_event(GUI::DragEvent& event)
 {
-    auto const& mime_types = event.mime_types();
-    if (mime_types.contains_slow("text/uri-list"sv))
+    if (event.mime_data().has_urls())
         event.accept();
 }
 
@@ -467,7 +541,7 @@ void PDFViewerWidget::drop_event(GUI::DropEvent& event)
             return;
         }
 
-        auto response = FileSystemAccessClient::Client::the().request_file_read_only_approved(window(), urls.first().serialize_path());
+        auto response = FileSystemAccessClient::Client::the().request_file_read_only_approved(window(), URL::percent_decode(urls.first().serialize_path()));
         if (response.is_error())
             return;
         if (auto result = try_open_file(response.value().filename(), response.value().release_stream()); result.is_error())

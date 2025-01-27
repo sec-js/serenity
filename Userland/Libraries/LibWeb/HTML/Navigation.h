@@ -47,6 +47,7 @@ struct NavigationResult {
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#navigation-api-method-tracker
 struct NavigationAPIMethodTracker final : public JS::Cell {
     JS_CELL(NavigationAPIMethodTracker, JS::Cell);
+    JS_DECLARE_ALLOCATOR(NavigationAPIMethodTracker);
 
     NavigationAPIMethodTracker(JS::NonnullGCPtr<Navigation> navigation,
         Optional<String> key,
@@ -109,17 +110,17 @@ public:
     // Abstract Operations
     bool has_entries_and_events_disabled() const;
     i64 get_the_navigation_api_entry_index(SessionHistoryEntry const&) const;
-    void abort_the_ongoing_navigation(Optional<JS::NonnullGCPtr<WebIDL::DOMException>> error = {});
+    void abort_the_ongoing_navigation(JS::GCPtr<WebIDL::DOMException> error = {});
     bool fire_a_traverse_navigate_event(JS::NonnullGCPtr<SessionHistoryEntry> destination_she, UserNavigationInvolvement = UserNavigationInvolvement::None);
     bool fire_a_push_replace_reload_navigate_event(
         Bindings::NavigationType,
-        AK::URL destination_url,
+        URL::URL destination_url,
         bool is_same_document,
         UserNavigationInvolvement = UserNavigationInvolvement::None,
         Optional<Vector<XHR::FormDataEntry>&> form_data_entry_list = {},
         Optional<SerializationRecord> navigation_api_state = {},
         Optional<SerializationRecord> classic_history_api_state = {});
-    bool fire_a_download_request_navigate_event(AK::URL destination_url, UserNavigationInvolvement user_involvement, String filename);
+    bool fire_a_download_request_navigate_event(URL::URL destination_url, UserNavigationInvolvement user_involvement, String filename);
 
     void initialize_the_navigation_api_entries_for_a_new_document(Vector<JS::NonnullGCPtr<SessionHistoryEntry>> const& new_shes, JS::NonnullGCPtr<SessionHistoryEntry> initial_she);
     void update_the_navigation_api_entries_for_a_same_document_navigation(JS::NonnullGCPtr<SessionHistoryEntry> destination_she, Bindings::NavigationType);
@@ -190,5 +191,6 @@ private:
 };
 
 HistoryHandlingBehavior to_history_handling_behavior(Bindings::NavigationHistoryBehavior);
+Bindings::NavigationHistoryBehavior to_navigation_history_behavior(HistoryHandlingBehavior);
 
 }

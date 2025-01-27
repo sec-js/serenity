@@ -125,14 +125,14 @@ void EventLoop::notify_forked(ForkEvent)
     current().m_impl->notify_forked_and_in_child();
 }
 
-int EventLoop::register_timer(EventReceiver& object, int milliseconds, bool should_reload, TimerShouldFireWhenNotVisible fire_when_not_visible)
+intptr_t EventLoop::register_timer(EventReceiver& object, int milliseconds, bool should_reload, TimerShouldFireWhenNotVisible fire_when_not_visible)
 {
     return EventLoopManager::the().register_timer(object, milliseconds, should_reload, fire_when_not_visible);
 }
 
-bool EventLoop::unregister_timer(int timer_id)
+void EventLoop::unregister_timer(intptr_t timer_id)
 {
-    return EventLoopManager::the().unregister_timer(timer_id);
+    EventLoopManager::the().unregister_timer(timer_id);
 }
 
 void EventLoop::register_notifier(Badge<Notifier>, Notifier& notifier)
@@ -148,6 +148,35 @@ void EventLoop::unregister_notifier(Badge<Notifier>, Notifier& notifier)
 void EventLoop::wake()
 {
     m_impl->wake();
+}
+
+void EventLoop::adopt_coroutine(Coroutine<void>&& coroutine)
+{
+    class OrphanedCoroutine {
+        struct PromiseType;
+
+    public:
+        using promise_type = PromiseType;
+
+    private:
+        struct Destroyer {
+            bool await_ready() const noexcept { return false; }
+            void await_suspend(std::coroutine_handle<> handle) const noexcept { handle.destroy(); }
+            void await_resume() const noexcept { }
+        };
+
+        struct PromiseType {
+            OrphanedCoroutine get_return_object() { return {}; }
+            AK::Detail::SuspendNever initial_suspend() { return {}; }
+            Destroyer final_suspend() noexcept { return {}; }
+            void return_void() { }
+        };
+    };
+
+    [](Coroutine<void>&& coroutine) mutable -> OrphanedCoroutine {
+        auto saved_coroutine = move(coroutine);
+        co_await saved_coroutine;
+    }(move(coroutine));
 }
 
 void EventLoop::deferred_invoke(Function<void()> invokee)

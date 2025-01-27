@@ -9,7 +9,6 @@
 #include "Game.h"
 #include "MainWidget.h"
 #include <AK/NumberFormat.h>
-#include <AK/URL.h>
 #include <LibConfig/Client.h>
 #include <LibCore/System.h>
 #include <LibCore/Timer.h>
@@ -24,6 +23,7 @@
 #include <LibGUI/Statusbar.h>
 #include <LibGUI/Window.h>
 #include <LibMain/Main.h>
+#include <LibURL/URL.h>
 #include <stdio.h>
 
 enum class StatisticDisplay : u8 {
@@ -154,11 +154,11 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 
     uint64_t seconds_elapsed = 0;
 
-    auto timer = TRY(Core::Timer::create_repeating(1000, [&]() {
+    auto timer = Core::Timer::create_repeating(1000, [&]() {
         ++seconds_elapsed;
 
         statusbar.set_text(2, String::formatted("Time: {}", human_readable_digital_time(seconds_elapsed)).release_value_but_fixme_should_propagate_errors());
-    }));
+    });
 
     game.on_game_start = [&]() {
         seconds_elapsed = 0;

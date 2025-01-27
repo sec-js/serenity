@@ -21,7 +21,7 @@ class HTMLBodyElement final
 public:
     virtual ~HTMLBodyElement() override;
 
-    virtual void attribute_changed(FlyString const&, Optional<String> const&) override;
+    virtual void attribute_changed(FlyString const&, Optional<String> const& old_value, Optional<String> const&) override;
     virtual void apply_presentational_hints(CSS::StyleProperties&) const override;
 
     // https://www.w3.org/TR/html-aria/#el-body
@@ -38,10 +38,10 @@ private:
     virtual void initialize(JS::Realm&) override;
 
     // ^HTML::GlobalEventHandlers
-    virtual EventTarget& global_event_handlers_to_event_target(FlyString const& event_name) override;
+    virtual JS::GCPtr<DOM::EventTarget> global_event_handlers_to_event_target(FlyString const& event_name) override;
 
     // ^HTML::WindowEventHandlers
-    virtual EventTarget& window_event_handlers_to_event_target() override;
+    virtual JS::GCPtr<DOM::EventTarget> window_event_handlers_to_event_target() override;
 
     RefPtr<CSS::ImageStyleValue> m_background_style_value;
 };

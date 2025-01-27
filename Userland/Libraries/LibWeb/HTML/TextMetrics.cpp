@@ -5,6 +5,7 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/TextMetricsPrototype.h>
 #include <LibWeb/HTML/TextMetrics.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 
@@ -27,7 +28,7 @@ TextMetrics::~TextMetrics() = default;
 void TextMetrics::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::TextMetricsPrototype>(realm, "TextMetrics"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(TextMetrics);
 }
 
 }

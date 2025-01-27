@@ -10,23 +10,23 @@
 
 #include <AK/ByteBuffer.h>
 #include <AK/RefCounted.h>
-#include <AK/URL.h>
 #include <AK/Weakable.h>
+#include <LibURL/URL.h>
 #include <LibWeb/DOM/EventTarget.h>
+#include <LibWeb/DOMURL/URLSearchParams.h>
 #include <LibWeb/Fetch/BodyInit.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Headers.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Statuses.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/MimeSniff/MimeType.h>
-#include <LibWeb/URL/URLSearchParams.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 #include <LibWeb/XHR/XMLHttpRequestEventTarget.h>
 
 namespace Web::XHR {
 
 // https://fetch.spec.whatwg.org/#typedefdef-xmlhttprequestbodyinit
-using DocumentOrXMLHttpRequestBodyInit = Variant<JS::Handle<Web::DOM::Document>, JS::Handle<Web::FileAPI::Blob>, JS::Handle<WebIDL::BufferSource>, JS::Handle<XHR::FormData>, JS::Handle<Web::URL::URLSearchParams>, AK::String>;
+using DocumentOrXMLHttpRequestBodyInit = Variant<JS::Handle<Web::DOM::Document>, JS::Handle<Web::FileAPI::Blob>, JS::Handle<WebIDL::BufferSource>, JS::Handle<XHR::FormData>, JS::Handle<Web::DOMURL::URLSearchParams>, AK::String>;
 
 class XMLHttpRequest final : public XMLHttpRequestEventTarget {
     WEB_PLATFORM_OBJECT(XMLHttpRequest, XMLHttpRequestEventTarget);
@@ -52,6 +52,7 @@ public:
     WebIDL::ExceptionOr<JS::GCPtr<DOM::Document>> response_xml();
     WebIDL::ExceptionOr<JS::Value> response();
     Bindings::XMLHttpRequestResponseType response_type() const { return m_response_type; }
+    String response_url();
 
     WebIDL::ExceptionOr<void> open(String const& method, String const& url);
     WebIDL::ExceptionOr<void> open(String const& method, String const& url, bool async, Optional<String> const& username = Optional<String> {}, Optional<String> const& password = Optional<String> {});
@@ -83,9 +84,9 @@ private:
     virtual void visit_edges(Cell::Visitor&) override;
     virtual bool must_survive_garbage_collection() const override;
 
-    ErrorOr<MimeSniff::MimeType> get_response_mime_type() const;
-    ErrorOr<Optional<StringView>> get_final_encoding() const;
-    ErrorOr<MimeSniff::MimeType> get_final_mime_type() const;
+    [[nodiscard]] MimeSniff::MimeType get_response_mime_type() const;
+    [[nodiscard]] Optional<StringView> get_final_encoding() const;
+    [[nodiscard]] MimeSniff::MimeType get_final_mime_type() const;
 
     String get_text_response() const;
     void set_document_response();
@@ -129,7 +130,7 @@ private:
     // https://xhr.spec.whatwg.org/#request-url
     // request URL
     //     A URL.
-    AK::URL m_request_url;
+    URL::URL m_request_url;
 
     // https://xhr.spec.whatwg.org/#author-request-headers
     // author request headers

@@ -96,12 +96,6 @@ ErrorOr<size_t> Plan9FSInode::read_bytes_locked(off_t offset, size_t size, UserO
     return nread;
 }
 
-ErrorOr<void> Plan9FSInode::replace_child(StringView, Inode&)
-{
-    // TODO
-    return ENOTIMPL;
-}
-
 ErrorOr<size_t> Plan9FSInode::write_bytes_locked(off_t offset, size_t size, UserOrKernelBuffer const& data, OpenFileDescription*)
 {
     TRY(ensure_open_for_mode(O_WRONLY));
@@ -284,8 +278,9 @@ ErrorOr<void> Plan9FSInode::chown(UserID, GroupID)
     return ENOTIMPL;
 }
 
-ErrorOr<void> Plan9FSInode::truncate(u64 new_size)
+ErrorOr<void> Plan9FSInode::truncate_locked(u64 new_size)
 {
+    VERIFY(m_inode_lock.is_locked());
     if (fs().m_remote_protocol_version >= Plan9FS::ProtocolVersion::v9P2000L) {
         Plan9FSMessage message { fs(), Plan9FSMessage::Type::Tsetattr };
         SetAttrMask valid = SetAttrMask::Size;

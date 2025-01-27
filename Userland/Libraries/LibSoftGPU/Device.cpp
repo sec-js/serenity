@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2021, Stephan Unverwerth <s.unverwerth@serenityos.org>
  * Copyright (c) 2021, Jesse Buhagiar <jooster669@gmail.com>
- * Copyright (c) 2022-2023, Jelle Raaijmakers <jelle@gmta.nl>
+ * Copyright (c) 2022-2024, Jelle Raaijmakers <jelle@gmta.nl>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -46,9 +46,8 @@ using AK::SIMD::i32x4;
 using AK::SIMD::load4_masked;
 using AK::SIMD::maskbits;
 using AK::SIMD::maskcount;
+using AK::SIMD::simd_cast;
 using AK::SIMD::store4_masked;
-using AK::SIMD::to_f32x4;
-using AK::SIMD::to_u32x4;
 using AK::SIMD::u32x4;
 
 static constexpr int subpixel_factor = 1 << SUBPIXEL_BITS;
@@ -84,10 +83,10 @@ static GPU::ColorType to_argb32(FloatVector4 const& color)
 ALWAYS_INLINE static u32x4 to_argb32(Vector4<f32x4> const& color)
 {
     auto clamped = color.clamped(expand4(0.0f), expand4(1.0f));
-    auto r = to_u32x4(clamped.x() * 255);
-    auto g = to_u32x4(clamped.y() * 255);
-    auto b = to_u32x4(clamped.z() * 255);
-    auto a = to_u32x4(clamped.w() * 255);
+    auto r = simd_cast<u32x4>(clamped.x() * 255);
+    auto g = simd_cast<u32x4>(clamped.y() * 255);
+    auto b = simd_cast<u32x4>(clamped.z() * 255);
+    auto a = simd_cast<u32x4>(clamped.w() * 255);
 
     return a << 24 | r << 16 | g << 8 | b;
 }
@@ -96,10 +95,10 @@ static Vector4<f32x4> to_vec4(u32x4 bgra)
 {
     auto constexpr one_over_255 = expand4(1.0f / 255);
     return {
-        to_f32x4((bgra >> 16) & 0xff) * one_over_255,
-        to_f32x4((bgra >> 8) & 0xff) * one_over_255,
-        to_f32x4(bgra & 0xff) * one_over_255,
-        to_f32x4((bgra >> 24) & 0xff) * one_over_255,
+        simd_cast<f32x4>((bgra >> 16) & 0xff) * one_over_255,
+        simd_cast<f32x4>((bgra >> 8) & 0xff) * one_over_255,
+        simd_cast<f32x4>(bgra & 0xff) * one_over_255,
+        simd_cast<f32x4>((bgra >> 24) & 0xff) * one_over_255,
     };
 }
 
@@ -137,40 +136,89 @@ ALWAYS_INLINE static void test_alpha(PixelQuad& quad, GPU::AlphaTestFunction alp
 
 ALWAYS_INLINE static bool is_blend_factor_constant(GPU::BlendFactor blend_factor)
 {
-    return (blend_factor == GPU::BlendFactor::One || blend_factor == GPU::BlendFactor::Zero);
+    return blend_factor == GPU::BlendFactor::Zero
+        || blend_factor == GPU::BlendFactor::One
+        || blend_factor == GPU::BlendFactor::ConstantColor
+        || blend_factor == GPU::BlendFactor::OneMinusConstantColor
+        || blend_factor == GPU::BlendFactor::ConstantAlpha
+        || blend_factor == GPU::BlendFactor::OneMinusConstantAlpha;
 }
 
-// OpenGL 1.5 § 4.1.8, table 4.1
-ALWAYS_INLINE static Vector4<f32x4> get_blend_factor(GPU::BlendFactor blend_factor, Vector4<f32x4> const& source_color, Vector4<f32x4> const& destination_color)
+// OpenGL 2.0 § 4.1.8, table 4.2
+ALWAYS_INLINE static Vector4<f32x4> get_blend_factor(GPU::BlendFactor blend_factor, FloatVector4 blend_color, Vector4<f32x4> const& source_color, Vector4<f32x4> const& destination_color)
 {
     switch (blend_factor) {
-    case GPU::BlendFactor::DstAlpha:
-        return to_vec4(destination_color.w());
-    case GPU::BlendFactor::DstColor:
-        return destination_color;
+    case GPU::BlendFactor::Zero:
+        return to_vec4(expand4(0.f));
     case GPU::BlendFactor::One:
         return to_vec4(expand4(1.f));
-    case GPU::BlendFactor::OneMinusDstAlpha:
-        return to_vec4(1.f - destination_color.w());
-    case GPU::BlendFactor::OneMinusDstColor:
-        return to_vec4(expand4(1.f)) - destination_color;
-    case GPU::BlendFactor::OneMinusSrcAlpha:
-        return to_vec4(1.f - source_color.w());
+    case GPU::BlendFactor::SrcColor:
+        return source_color;
     case GPU::BlendFactor::OneMinusSrcColor:
         return to_vec4(expand4(1.f)) - source_color;
+    case GPU::BlendFactor::DstColor:
+        return destination_color;
+    case GPU::BlendFactor::OneMinusDstColor:
+        return to_vec4(expand4(1.f)) - destination_color;
     case GPU::BlendFactor::SrcAlpha:
         return to_vec4(source_color.w());
+    case GPU::BlendFactor::OneMinusSrcAlpha:
+        return to_vec4(1.f - source_color.w());
+    case GPU::BlendFactor::DstAlpha:
+        return to_vec4(destination_color.w());
+    case GPU::BlendFactor::OneMinusDstAlpha:
+        return to_vec4(1.f - destination_color.w());
+    case GPU::BlendFactor::ConstantColor:
+        return expand4(blend_color);
+    case GPU::BlendFactor::OneMinusConstantColor:
+        return expand4(FloatVector4 { 1.f, 1.f, 1.f, 1.f } - blend_color);
+    case GPU::BlendFactor::ConstantAlpha:
+        return to_vec4(expand4(blend_color.w()));
+    case GPU::BlendFactor::OneMinusConstantAlpha:
+        return to_vec4(expand4(1.f - blend_color.w()));
     case GPU::BlendFactor::SrcAlphaSaturate: {
         auto saturated = min(source_color.w(), 1.f - destination_color.w());
         return { saturated, saturated, saturated, expand4(1.f) };
     }
-    case GPU::BlendFactor::SrcColor:
-        return source_color;
-    case GPU::BlendFactor::Zero:
-        return to_vec4(expand4(0.f));
     default:
         VERIFY_NOT_REACHED();
     }
+}
+
+// OpenGL 2.0 § 4.1.8, table 4.1
+ALWAYS_INLINE static Vector4<f32x4> blend_colors(
+    GPU::BlendEquation rgb_mode,
+    GPU::BlendEquation alpha_mode,
+    Vector4<f32x4> const& source,
+    Vector4<f32x4> const& source_weights,
+    Vector4<f32x4> const& destination,
+    Vector4<f32x4> const& destination_weights)
+{
+    auto apply_equation = [&](GPU::BlendEquation mode, auto source, auto source_weights, auto destination, auto destination_weights) -> auto {
+        switch (mode) {
+        case GPU::BlendEquation::Add:
+            return source * source_weights + destination * destination_weights;
+        case GPU::BlendEquation::Subtract:
+            return source * source_weights - destination * destination_weights;
+        case GPU::BlendEquation::ReverseSubtract:
+            return destination * source_weights - source * destination_weights;
+        case GPU::BlendEquation::Min:
+            return AK::min(source, destination);
+        case GPU::BlendEquation::Max:
+            return AK::max(source, destination);
+        default:
+            VERIFY_NOT_REACHED();
+        }
+    };
+
+    // Single calculation if RGB mode is the same as the alpha mode
+    if (rgb_mode == alpha_mode)
+        return apply_equation(rgb_mode, source, source_weights, destination, destination_weights);
+
+    // Split RGB/alpha calculation
+    auto rgb = apply_equation(rgb_mode, source.xyz(), source_weights.xyz(), destination.xyz(), destination_weights.xyz());
+    auto alpha = apply_equation(alpha_mode, source.w(), source_weights.w(), destination.w(), destination_weights.w());
+    return { rgb.x(), rgb.y(), rgb.z(), alpha };
 }
 
 template<typename CB1, typename CB2, typename CB3>
@@ -239,16 +287,16 @@ ALWAYS_INLINE void Device::rasterize(Gfx::IntRect& render_bounds, CB1 set_covera
     auto const qy0 = render_bounds_top & ~1;
     auto const qy1 = render_bounds_bottom & ~1;
 
-    // Blend factors
-    Vector4<f32x4> src_factor;
-    Vector4<f32x4> dst_factor;
-    auto const src_factor_is_constant = is_blend_factor_constant(m_options.blend_source_factor);
-    auto const dst_factor_is_constant = is_blend_factor_constant(m_options.blend_destination_factor);
+    // Blend weights
+    Vector4<f32x4> source_weights;
+    Vector4<f32x4> destination_weights;
+    auto const source_weights_are_constant = is_blend_factor_constant(m_options.blend_source_factor);
+    auto const destination_weights_are_constant = is_blend_factor_constant(m_options.blend_destination_factor);
     if (m_options.enable_blending) {
-        if (src_factor_is_constant)
-            src_factor = get_blend_factor(m_options.blend_source_factor, {}, {});
-        if (dst_factor_is_constant)
-            dst_factor = get_blend_factor(m_options.blend_destination_factor, {}, {});
+        if (source_weights_are_constant)
+            source_weights = get_blend_factor(m_options.blend_source_factor, m_options.blend_color, {}, {});
+        if (destination_weights_are_constant)
+            destination_weights = get_blend_factor(m_options.blend_destination_factor, m_options.blend_color, {}, {});
     }
 
     // Rasterize all quads
@@ -436,19 +484,19 @@ ALWAYS_INLINE void Device::rasterize(Gfx::IntRect& render_bounds, CB1 set_covera
 
             auto out_color = quad.get_output_vector4(SHADER_OUTPUT_FIRST_COLOR);
 
+            // Blend color values from pixel_staging into color_buffer
             if (m_options.enable_blending) {
                 INCREASE_STATISTICS_COUNTER(g_num_pixels_blended, maskcount(quad.mask));
 
-                // Blend color values from pixel_staging into color_buffer
-                auto const& src = out_color;
-                auto const dst = to_vec4(dst_u32);
+                auto const& source_color = out_color;
+                auto const destination_color = to_vec4(dst_u32);
 
-                if (!src_factor_is_constant)
-                    src_factor = get_blend_factor(m_options.blend_source_factor, src, dst);
-                if (!dst_factor_is_constant)
-                    dst_factor = get_blend_factor(m_options.blend_destination_factor, src, dst);
+                if (!source_weights_are_constant)
+                    source_weights = get_blend_factor(m_options.blend_source_factor, m_options.blend_color, source_color, destination_color);
+                if (!destination_weights_are_constant)
+                    destination_weights = get_blend_factor(m_options.blend_destination_factor, m_options.blend_color, source_color, destination_color);
 
-                out_color = src * src_factor + dst * dst_factor;
+                out_color = blend_colors(m_options.blend_equation_rgb, m_options.blend_equation_alpha, source_color, source_weights, destination_color, destination_weights);
             }
 
             auto const argb32_color = to_argb32(out_color);
@@ -730,9 +778,9 @@ void Device::rasterize_triangle(Triangle& triangle)
             quad.mask = test_point4(edge_values);
 
             quad.barycentrics = {
-                to_f32x4(edge_values.x()),
-                to_f32x4(edge_values.y()),
-                to_f32x4(edge_values.z()),
+                simd_cast<f32x4>(edge_values.x()),
+                simd_cast<f32x4>(edge_values.y()),
+                simd_cast<f32x4>(edge_values.z()),
             };
         },
         [&](auto& quad) {

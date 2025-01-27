@@ -3,6 +3,7 @@ false
 123
 123.456
 This is a String object
+
 9007199254740991
 1692748800000
 /abc/gimsuy
@@ -10,6 +11,7 @@ Error
 URIError: hello
 {"1":2,"a":"b"}
 1,4,aaaa
+
 true
 1
 true

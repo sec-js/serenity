@@ -19,7 +19,6 @@
 #include <LibWeb/Painting/PaintableBox.h>
 #include <LibWeb/Painting/SVGPaintable.h>
 #include <LibWeb/Painting/StackingContext.h>
-#include <LibWeb/Painting/TableBordersPainting.h>
 #include <LibWeb/SVG/SVGMaskElement.h>
 
 namespace Web::Painting {
@@ -53,6 +52,14 @@ void StackingContext::sort()
 
     for (auto* child : m_children)
         child->sort();
+}
+
+void StackingContext::set_last_paint_generation_id(u64 generation_id)
+{
+    if (m_last_paint_generation_id.has_value() && m_last_paint_generation_id.value() >= generation_id) {
+        dbgln("FIXME: Painting commands are recorded twice for stacking context: {}", m_paintable->layout_node().debug_description());
+    }
+    m_last_paint_generation_id = generation_id;
 }
 
 static PaintPhase to_paint_phase(StackingContext::StackingContextPaintPhase phase)
@@ -104,13 +111,13 @@ void StackingContext::paint_descendants(PaintContext& context, Paintable const& 
             // FIXME: This may not be fully correct with respect to the paint phases.
             if (phase == StackingContextPaintPhase::Foreground)
                 paint_node_as_stacking_context(child, context);
-            return;
+            return IterationDecision::Continue;
         }
 
-        if (stacking_context && z_index.has_value())
-            return;
-        if (child.is_positioned() && !z_index.has_value())
-            return;
+        if (stacking_context && z_index.value_or(0) != 0)
+            return IterationDecision::Continue;
+        if (child.is_positioned() && z_index.value_or(0) == 0)
+            return IterationDecision::Continue;
 
         if (stacking_context) {
             // FIXME: This may not be fully correct with respect to the paint phases.
@@ -118,21 +125,17 @@ void StackingContext::paint_descendants(PaintContext& context, Paintable const& 
                 paint_child(context, *stacking_context);
             }
             // Note: Don't further recurse into descendants as paint_child() will do that.
-            return;
+            return IterationDecision::Continue;
         }
 
-        bool child_is_inline_or_replaced = child.is_inline() || is<Layout::ReplacedBox>(child);
+        bool child_is_inline_or_replaced = child.is_inline() || is<Layout::ReplacedBox>(child.layout_node());
         switch (phase) {
         case StackingContextPaintPhase::BackgroundAndBorders:
             if (!child_is_inline_or_replaced && !child.is_floating()) {
                 paint_node(child, context, PaintPhase::Background);
-                bool is_table_with_collapsed_borders = child.display().is_table_inside() && child.computed_values().border_collapse() == CSS::BorderCollapse::Collapse;
-                if (!child.display().is_table_cell() && !is_table_with_collapsed_borders)
-                    paint_node(child, context, PaintPhase::Border);
+                paint_node(child, context, PaintPhase::Border);
                 paint_descendants(context, child, phase);
-                if (child.display().is_table_inside() || child.computed_values().border_collapse() == CSS::BorderCollapse::Collapse) {
-                    paint_table_borders(context, verify_cast<PaintableBox>(child));
-                }
+                paint_node(child, context, PaintPhase::TableCollapsedBorder);
             }
             break;
         case StackingContextPaintPhase::Floats:
@@ -147,8 +150,7 @@ void StackingContext::paint_descendants(PaintContext& context, Paintable const& 
             if (child_is_inline_or_replaced) {
                 paint_node(child, context, PaintPhase::Background);
                 paint_node(child, context, PaintPhase::Border);
-                if (child.display().is_table_inside() && child.computed_values().border_collapse() == CSS::BorderCollapse::Separate)
-                    paint_table_borders(context, verify_cast<PaintableBox>(child));
+                paint_node(child, context, PaintPhase::TableCollapsedBorder);
                 paint_descendants(context, child, StackingContextPaintPhase::BackgroundAndBorders);
             }
             paint_descendants(context, child, phase);
@@ -163,6 +165,8 @@ void StackingContext::paint_descendants(PaintContext& context, Paintable const& 
             paint_descendants(context, child, phase);
             break;
         }
+
+        return IterationDecision::Continue;
     });
 
     paintable.after_children_paint(context, to_paint_phase(phase));
@@ -170,6 +174,8 @@ void StackingContext::paint_descendants(PaintContext& context, Paintable const& 
 
 void StackingContext::paint_child(PaintContext& context, StackingContext const& child)
 {
+    const_cast<StackingContext&>(child).set_last_paint_generation_id(context.paint_generation_id());
+
     auto parent_paintable = child.paintable().parent();
     if (parent_paintable)
         parent_paintable->before_children_paint(context, PaintPhase::Foreground);
@@ -206,32 +212,23 @@ void StackingContext::paint_internal(PaintContext& context) const
 
     // Draw positioned descendants with z-index `0` or `auto` in tree order. (step 8)
     // FIXME: There's more to this step that we have yet to understand and implement.
-    paintable().for_each_in_subtree([&context](Paintable const& paintable) {
-        auto const& z_index = paintable.computed_values().z_index();
-
-        if (!paintable.is_positioned() || (z_index.has_value() && z_index.value() != 0)) {
-            return paintable.stacking_context()
-                ? TraversalDecision::SkipChildrenAndContinue
-                : TraversalDecision::Continue;
-        }
+    for (auto const& paintable : m_positioned_descendants_with_stack_level_0_and_stacking_contexts) {
+        if (!paintable->is_positioned())
+            continue;
 
         // At this point, `paintable_box` is a positioned descendant with z-index: auto.
         // FIXME: This is basically duplicating logic found elsewhere in this same function. Find a way to make this more elegant.
-        auto exit_decision = TraversalDecision::Continue;
-        auto* parent_paintable = paintable.parent();
+        auto* parent_paintable = paintable->parent();
         if (parent_paintable)
             parent_paintable->before_children_paint(context, PaintPhase::Foreground);
-        if (auto* child = paintable.stacking_context()) {
+        if (auto* child = paintable->stacking_context()) {
             paint_child(context, *child);
-            exit_decision = TraversalDecision::SkipChildrenAndContinue;
         } else {
             paint_node_as_stacking_context(paintable, context);
         }
         if (parent_paintable)
             parent_paintable->after_children_paint(context, PaintPhase::Foreground);
-
-        return exit_decision;
-    });
+    };
 
     // Stacking contexts formed by positioned descendants with z-indices greater than or equal to 1 in z-index order
     // (smallest first) then tree order. (Step 9)
@@ -273,7 +270,7 @@ void StackingContext::paint(PaintContext& context) const
     if (opacity == 0.0f)
         return;
 
-    RecordingPainterStateSaver saver(context.recording_painter());
+    DisplayListRecorderStateSaver saver(context.display_list_recorder());
 
     auto to_device_pixels_scale = float(context.device_pixels_per_css_pixel());
     Gfx::IntRect source_paintable_rect;
@@ -292,7 +289,7 @@ void StackingContext::paint(PaintContext& context) const
         transform_origin = paintable_box().transform_origin().to_type<float>();
     }
 
-    RecordingPainter::PushStackingContextParams push_stacking_context_params {
+    DisplayListRecorder::PushStackingContextParams push_stacking_context_params {
         .opacity = opacity,
         .is_fixed_position = paintable().is_fixed_position(),
         .source_paintable_rect = source_paintable_rect,
@@ -319,47 +316,19 @@ void StackingContext::paint(PaintContext& context) const
         }
     }
 
-    context.recording_painter().save();
+    context.display_list_recorder().save();
     if (paintable().is_paintable_box() && paintable_box().scroll_frame_id().has_value())
-        context.recording_painter().set_scroll_frame_id(*paintable_box().scroll_frame_id());
-    context.recording_painter().push_stacking_context(push_stacking_context_params);
+        context.display_list_recorder().set_scroll_frame_id(*paintable_box().scroll_frame_id());
+    context.display_list_recorder().push_stacking_context(push_stacking_context_params);
     paint_internal(context);
-    context.recording_painter().pop_stacking_context();
-    context.recording_painter().restore();
+    context.display_list_recorder().pop_stacking_context();
+    context.display_list_recorder().restore();
 }
 
-template<typename Callback>
-static TraversalDecision for_each_in_inclusive_subtree_within_same_stacking_context_in_reverse(Paintable const& paintable, Callback callback)
-{
-    if (paintable.stacking_context()) {
-        // Note: Include the stacking context (so we can hit test it), but don't recurse into it.
-        if (auto decision = callback(paintable); decision != TraversalDecision::Continue)
-            return decision;
-        return TraversalDecision::SkipChildrenAndContinue;
-    }
-    for (auto* child = paintable.last_child(); child; child = child->previous_sibling()) {
-        if (for_each_in_inclusive_subtree_within_same_stacking_context_in_reverse(*child, callback) == TraversalDecision::Break)
-            return TraversalDecision::Break;
-    }
-    if (auto decision = callback(paintable); decision != TraversalDecision::Continue)
-        return decision;
-    return TraversalDecision::Continue;
-}
-
-template<typename Callback>
-static TraversalDecision for_each_in_subtree_within_same_stacking_context_in_reverse(Paintable const& paintable, Callback callback)
-{
-    for (auto* child = paintable.last_child(); child; child = child->previous_sibling()) {
-        if (for_each_in_inclusive_subtree_within_same_stacking_context_in_reverse(*child, callback) == TraversalDecision::Break)
-            return TraversalDecision::Break;
-    }
-    return TraversalDecision::Continue;
-}
-
-Optional<HitTestResult> StackingContext::hit_test(CSSPixelPoint position, HitTestType type) const
+TraversalDecision StackingContext::hit_test(CSSPixelPoint position, HitTestType type, Function<TraversalDecision(HitTestResult)> const& callback) const
 {
     if (!paintable().is_visible())
-        return {};
+        return TraversalDecision::Continue;
 
     CSSPixelPoint transform_origin { 0, 0 };
     if (paintable().is_paintable_box())
@@ -385,84 +354,49 @@ Optional<HitTestResult> StackingContext::hit_test(CSSPixelPoint position, HitTes
         auto const& child = *m_children[i];
         if (child.paintable().computed_values().z_index().value_or(0) <= 0)
             break;
-        auto result = child.hit_test(transformed_position, type);
-        if (result.has_value() && result->paintable->visible_for_hit_testing())
-            return result;
+        if (child.hit_test(transformed_position, type, callback) == TraversalDecision::Break)
+            return TraversalDecision::Break;
     }
 
     // 6. the child stacking contexts with stack level 0 and the positioned descendants with stack level 0.
-    Optional<HitTestResult> result;
-    for_each_in_subtree_within_same_stacking_context_in_reverse(paintable(), [&](Paintable const& paintable) {
-        if (!paintable.is_paintable_box())
-            return TraversalDecision::Continue;
-
-        auto const& paintable_box = verify_cast<PaintableBox>(paintable);
-
-        auto const& z_index = paintable_box.computed_values().z_index();
-        if (z_index.value_or(0) == 0 && paintable_box.is_positioned() && !paintable_box.stacking_context()) {
-            auto candidate = paintable_box.hit_test(transformed_position, type);
-            if (candidate.has_value() && candidate->paintable->visible_for_hit_testing()) {
-                result = move(candidate);
+    for (auto const& paintable : m_positioned_descendants_with_stack_level_0_and_stacking_contexts.in_reverse()) {
+        if (paintable->stacking_context()) {
+            if (paintable->stacking_context()->hit_test(transformed_position, type, callback) == TraversalDecision::Break)
                 return TraversalDecision::Break;
-            }
+        } else {
+            if (paintable->hit_test(transformed_position, type, callback) == TraversalDecision::Break)
+                return TraversalDecision::Break;
         }
-
-        if (paintable_box.stacking_context()) {
-            if (z_index.value_or(0) == 0) {
-                auto candidate = paintable_box.stacking_context()->hit_test(transformed_position, type);
-                if (candidate.has_value() && candidate->paintable->visible_for_hit_testing()) {
-                    result = move(candidate);
-                    return TraversalDecision::Break;
-                }
-            }
-        }
-
-        return TraversalDecision::Continue;
-    });
-    if (result.has_value())
-        return result;
+    }
 
     // 5. the in-flow, inline-level, non-positioned descendants, including inline tables and inline blocks.
     if (paintable().layout_node().children_are_inline() && is<Layout::BlockContainer>(paintable().layout_node())) {
-        auto result = paintable_box().hit_test(transformed_position, type);
-        if (result.has_value() && result->paintable->visible_for_hit_testing())
-            return result;
+        for (auto const* child = paintable().last_child(); child; child = child->previous_sibling()) {
+            if (child->is_inline() && !child->is_absolutely_positioned() && !child->stacking_context()) {
+                if (child->hit_test(transformed_position, type, callback) == TraversalDecision::Break)
+                    return TraversalDecision::Break;
+            }
+        }
     }
 
     // 4. the non-positioned floats.
-    for_each_in_subtree_within_same_stacking_context_in_reverse(paintable(), [&](Paintable const& paintable) {
-        if (!paintable.is_paintable_box())
-            return TraversalDecision::Continue;
-
-        auto const& paintable_box = verify_cast<PaintableBox>(paintable);
-        if (paintable_box.is_floating()) {
-            if (auto candidate = paintable_box.hit_test(transformed_position, type); candidate.has_value()) {
-                result = move(candidate);
-                return TraversalDecision::Break;
-            }
-        }
-        return TraversalDecision::Continue;
-    });
-    if (result.has_value() && result->paintable->visible_for_hit_testing())
-        return result;
+    for (auto const& paintable : m_non_positioned_floating_descendants.in_reverse()) {
+        if (paintable->hit_test(transformed_position, type, callback) == TraversalDecision::Break)
+            return TraversalDecision::Break;
+    }
 
     // 3. the in-flow, non-inline-level, non-positioned descendants.
     if (!paintable().layout_node().children_are_inline()) {
-        for_each_in_subtree_within_same_stacking_context_in_reverse(paintable(), [&](Paintable const& paintable) {
-            if (!paintable.is_paintable_box())
-                return TraversalDecision::Continue;
+        for (auto const* child = paintable().last_child(); child; child = child->previous_sibling()) {
+            if (!child->is_paintable_box())
+                continue;
 
-            auto const& paintable_box = verify_cast<PaintableBox>(paintable);
-            if (!paintable_box.is_absolutely_positioned() && !paintable_box.is_floating()) {
-                if (auto candidate = paintable_box.hit_test(transformed_position, type); candidate.has_value()) {
-                    result = move(candidate);
+            auto const& paintable_box = verify_cast<PaintableBox>(*child);
+            if (!paintable_box.is_absolutely_positioned() && !paintable_box.is_floating() && !paintable_box.stacking_context()) {
+                if (paintable_box.hit_test(transformed_position, type, callback) == TraversalDecision::Break)
                     return TraversalDecision::Break;
-                }
             }
-            return TraversalDecision::Continue;
-        });
-        if (result.has_value() && result->paintable->visible_for_hit_testing())
-            return result;
+        }
     }
 
     // 2. the child stacking contexts with negative stack levels (most negative first).
@@ -471,21 +405,20 @@ Optional<HitTestResult> StackingContext::hit_test(CSSPixelPoint position, HitTes
         auto const& child = *m_children[i];
         if (child.paintable().computed_values().z_index().value_or(0) >= 0)
             break;
-        auto result = child.hit_test(transformed_position, type);
-        if (result.has_value() && result->paintable->visible_for_hit_testing())
-            return result;
+        if (child.hit_test(transformed_position, type, callback) == TraversalDecision::Break)
+            return TraversalDecision::Break;
     }
 
     // 1. the background and borders of the element forming the stacking context.
     if (paintable().is_paintable_box()) {
         if (paintable_box().absolute_border_box_rect().contains(transformed_position.x(), transformed_position.y())) {
-            return HitTestResult {
-                .paintable = const_cast<PaintableBox&>(paintable_box()),
-            };
+            auto hit_test_result = HitTestResult { .paintable = const_cast<PaintableBox&>(paintable_box()) };
+            if (callback(hit_test_result) == TraversalDecision::Break)
+                return TraversalDecision::Break;
         }
     }
 
-    return {};
+    return TraversalDecision::Continue;
 }
 
 void StackingContext::dump(int indent) const

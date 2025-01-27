@@ -18,9 +18,9 @@ class SVGRectElement final : public SVGGeometryElement {
 public:
     virtual ~SVGRectElement() override = default;
 
-    virtual void attribute_changed(FlyString const& name, Optional<String> const& value) override;
+    virtual void attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value) override;
 
-    virtual Gfx::Path& get_path() override;
+    virtual Gfx::Path get_path(CSSPixelSize viewport_size) override;
 
     JS::NonnullGCPtr<SVGAnimatedLength> x() const;
     JS::NonnullGCPtr<SVGAnimatedLength> y() const;
@@ -35,8 +35,6 @@ private:
     virtual void initialize(JS::Realm&) override;
 
     Gfx::FloatSize calculate_used_corner_radius_values() const;
-
-    Optional<Gfx::Path> m_path;
 
     Optional<float> m_x;
     Optional<float> m_y;

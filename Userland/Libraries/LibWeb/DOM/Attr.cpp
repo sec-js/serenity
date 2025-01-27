@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/AttrPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/DOM/Attr.h>
 #include <LibWeb/DOM/Document.h>
@@ -35,6 +36,7 @@ JS::NonnullGCPtr<Attr> Attr::clone(Document& document)
 Attr::Attr(Document& document, QualifiedName qualified_name, String value, Element* owner_element)
     : Node(document, NodeType::ATTRIBUTE_NODE)
     , m_qualified_name(move(qualified_name))
+    , m_lowercase_name(MUST(String(m_qualified_name.as_string()).to_lowercase()))
     , m_value(move(value))
     , m_owner_element(owner_element)
 {
@@ -43,7 +45,7 @@ Attr::Attr(Document& document, QualifiedName qualified_name, String value, Eleme
 void Attr::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::AttrPrototype>(realm, "Attr"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(Attr);
 }
 
 void Attr::visit_edges(Cell::Visitor& visitor)

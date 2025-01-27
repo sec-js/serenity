@@ -35,7 +35,8 @@ class HTMLObjectElement final
 public:
     virtual ~HTMLObjectElement() override;
 
-    virtual void attribute_changed(FlyString const& name, Optional<String> const& value) override;
+    virtual void form_associated_element_attribute_changed(FlyString const& name, Optional<String> const& value) override;
+    virtual void form_associated_element_was_removed(DOM::Node*) override;
 
     String data() const;
     void set_data(String const& data) { MUST(set_attribute(HTML::AttributeNames::data, data)); }
@@ -54,6 +55,8 @@ private:
     virtual bool is_html_object_element() const override { return true; }
 
     virtual void initialize(JS::Realm&) override;
+
+    virtual void apply_presentational_hints(CSS::StyleProperties&) const override;
 
     virtual JS::GCPtr<Layout::Node> create_layout_node(NonnullRefPtr<CSS::StyleProperties>) override;
 
@@ -75,17 +78,19 @@ private:
     virtual i32 default_tab_index_value() const override;
 
     // ^Layout::ImageProvider
+    virtual bool is_image_available() const override;
     virtual Optional<CSSPixels> intrinsic_width() const override;
     virtual Optional<CSSPixels> intrinsic_height() const override;
     virtual Optional<CSSPixelFraction> intrinsic_aspect_ratio() const override;
     virtual RefPtr<Gfx::ImmutableBitmap> current_image_bitmap(Gfx::IntSize = {}) const override;
     virtual void set_visible_in_viewport(bool) override;
+    virtual JS::NonnullGCPtr<DOM::Element const> to_html_element() const override { return *this; }
 
     Representation m_representation { Representation::Unknown };
 
     JS::GCPtr<DecodedImageData> image_data() const;
 
-    JS::GCPtr<SharedImageRequest> m_image_request;
+    JS::GCPtr<SharedResourceRequest> m_resource_request;
 };
 
 }

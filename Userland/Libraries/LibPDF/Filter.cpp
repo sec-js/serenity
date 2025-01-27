@@ -7,8 +7,10 @@
 #include <AK/BitStream.h>
 #include <AK/Hex.h>
 #include <LibCompress/Deflate.h>
-#include <LibCompress/LZWDecoder.h>
+#include <LibCompress/Lzw.h>
 #include <LibCompress/PackBitsDecoder.h>
+#include <LibGfx/ImageFormats/CCITTDecoder.h>
+#include <LibGfx/ImageFormats/JBIG2Loader.h>
 #include <LibGfx/ImageFormats/JPEGLoader.h>
 #include <LibGfx/ImageFormats/PNGLoader.h>
 #include <LibPDF/CommonNames.h>
@@ -17,41 +19,22 @@
 
 namespace PDF {
 
-PDFErrorOr<ByteBuffer> Filter::decode(ReadonlyBytes bytes, DeprecatedFlyString const& encoding_type, RefPtr<DictObject> decode_parms)
+PDFErrorOr<ByteBuffer> Filter::decode(Document* document, ReadonlyBytes bytes, DeprecatedFlyString const& encoding_type, RefPtr<DictObject> decode_parms)
 {
-    int predictor = 1;
-    int columns = 1;
-    int colors = 1;
-    int bits_per_component = 8;
-    int early_change = 1;
-
-    if (decode_parms) {
-        if (decode_parms->contains(CommonNames::Predictor))
-            predictor = decode_parms->get_value(CommonNames::Predictor).get<int>();
-        if (decode_parms->contains(CommonNames::Columns))
-            columns = decode_parms->get_value(CommonNames::Columns).get<int>();
-        if (decode_parms->contains(CommonNames::Colors))
-            colors = decode_parms->get_value(CommonNames::Colors).get<int>();
-        if (decode_parms->contains(CommonNames::BitsPerComponent))
-            bits_per_component = decode_parms->get_value(CommonNames::BitsPerComponent).get<int>();
-        if (decode_parms->contains(CommonNames::EarlyChange))
-            early_change = decode_parms->get_value(CommonNames::EarlyChange).get<int>();
-    }
-
     if (encoding_type == CommonNames::ASCIIHexDecode)
         return decode_ascii_hex(bytes);
     if (encoding_type == CommonNames::ASCII85Decode)
         return decode_ascii85(bytes);
     if (encoding_type == CommonNames::LZWDecode)
-        return decode_lzw(bytes, predictor, columns, colors, bits_per_component, early_change);
+        return decode_lzw(bytes, decode_parms);
     if (encoding_type == CommonNames::FlateDecode)
-        return decode_flate(bytes, predictor, columns, colors, bits_per_component);
+        return decode_flate(bytes, decode_parms);
     if (encoding_type == CommonNames::RunLengthDecode)
         return decode_run_length(bytes);
     if (encoding_type == CommonNames::CCITTFaxDecode)
-        return decode_ccitt(bytes);
+        return decode_ccitt(bytes, decode_parms);
     if (encoding_type == CommonNames::JBIG2Decode)
-        return decode_jbig2(bytes);
+        return decode_jbig2(document, bytes, decode_parms);
     if (encoding_type == CommonNames::DCTDecode)
         return decode_dct(bytes);
     if (encoding_type == CommonNames::JPXDecode)
@@ -228,9 +211,24 @@ PDFErrorOr<ByteBuffer> Filter::decode_tiff_prediction(Bytes bytes, int columns, 
     return decoded;
 }
 
-PDFErrorOr<ByteBuffer> Filter::handle_lzw_and_flate_parameters(ByteBuffer buffer, int predictor, int columns, int colors, int bits_per_component)
+PDFErrorOr<ByteBuffer> Filter::handle_lzw_and_flate_parameters(ByteBuffer buffer, RefPtr<DictObject> decode_parms)
 {
     // Table 3.7 Optional parameters for LZWDecode and FlateDecode filters
+    int predictor = 1;
+    int colors = 1;
+    int bits_per_component = 8;
+    int columns = 1;
+
+    if (decode_parms) {
+        if (decode_parms->contains(CommonNames::Predictor))
+            predictor = decode_parms->get_value(CommonNames::Predictor).get<int>();
+        if (decode_parms->contains(CommonNames::Colors))
+            colors = decode_parms->get_value(CommonNames::Colors).get<int>();
+        if (decode_parms->contains(CommonNames::BitsPerComponent))
+            bits_per_component = decode_parms->get_value(CommonNames::BitsPerComponent).get<int>();
+        if (decode_parms->contains(CommonNames::Columns))
+            columns = decode_parms->get_value(CommonNames::Columns).get<int>();
+    }
 
     if (predictor == 1)
         return buffer;
@@ -257,16 +255,21 @@ PDFErrorOr<ByteBuffer> Filter::handle_lzw_and_flate_parameters(ByteBuffer buffer
     return decode_png_prediction(buffer_bytes, bytes_per_row, bytes_per_pixel);
 }
 
-PDFErrorOr<ByteBuffer> Filter::decode_lzw(ReadonlyBytes bytes, int predictor, int columns, int colors, int bits_per_component, int early_change)
+PDFErrorOr<ByteBuffer> Filter::decode_lzw(ReadonlyBytes bytes, RefPtr<DictObject> decode_parms)
 {
-    auto decoded = TRY(Compress::LZWDecoder<BigEndianInputBitStream>::decode_all(bytes, 8, -early_change));
-    return handle_lzw_and_flate_parameters(move(decoded), predictor, columns, colors, bits_per_component);
+    // Table 3.7 Optional parameters for LZWDecode and FlateDecode filters
+    int early_change = 1;
+    if (decode_parms && decode_parms->contains(CommonNames::EarlyChange))
+        early_change = decode_parms->get_value(CommonNames::EarlyChange).get<int>();
+
+    auto decoded = TRY(Compress::LzwDecompressor<BigEndianInputBitStream>::decompress_all(bytes, 8, -early_change));
+    return handle_lzw_and_flate_parameters(move(decoded), decode_parms);
 }
 
-PDFErrorOr<ByteBuffer> Filter::decode_flate(ReadonlyBytes bytes, int predictor, int columns, int colors, int bits_per_component)
+PDFErrorOr<ByteBuffer> Filter::decode_flate(ReadonlyBytes bytes, RefPtr<DictObject> decode_parms)
 {
     auto buff = TRY(Compress::DeflateDecompressor::decompress_all(bytes.slice(2)));
-    return handle_lzw_and_flate_parameters(move(buff), predictor, columns, colors, bits_per_component);
+    return handle_lzw_and_flate_parameters(move(buff), decode_parms);
 }
 
 PDFErrorOr<ByteBuffer> Filter::decode_run_length(ReadonlyBytes bytes)
@@ -274,14 +277,89 @@ PDFErrorOr<ByteBuffer> Filter::decode_run_length(ReadonlyBytes bytes)
     return TRY(Compress::PackBits::decode_all(bytes, OptionalNone {}, Compress::PackBits::CompatibilityMode::PDF));
 }
 
-PDFErrorOr<ByteBuffer> Filter::decode_ccitt(ReadonlyBytes)
+static void invert_bits(ByteBuffer& decoded)
 {
-    return Error::rendering_unsupported_error("CCITTFaxDecode Filter is unsupported");
+    for (u8& byte : decoded.bytes())
+        byte = ~byte;
 }
 
-PDFErrorOr<ByteBuffer> Filter::decode_jbig2(ReadonlyBytes)
+PDFErrorOr<ByteBuffer> Filter::decode_ccitt(ReadonlyBytes bytes, RefPtr<DictObject> decode_parms)
 {
-    return Error::rendering_unsupported_error("JBIG2 Filter is unsupported");
+    // Table 3.9 Optional parameters for the CCITTFaxDecode filter
+    int k = 0;
+    bool require_end_of_line = false;
+    bool encoded_byte_align = false;
+    int columns = 1728;
+    int rows = 0;
+    bool end_of_block = true;
+    bool black_is_1 = false;
+    int damaged_rows_before_error = 0;
+    if (decode_parms) {
+        if (decode_parms->contains(CommonNames::K))
+            k = decode_parms->get_value(CommonNames::K).get<int>();
+        if (decode_parms->contains(CommonNames::EndOfLine))
+            require_end_of_line = decode_parms->get_value(CommonNames::EndOfLine).get<bool>();
+        if (decode_parms->contains(CommonNames::EncodedByteAlign))
+            encoded_byte_align = decode_parms->get_value(CommonNames::EncodedByteAlign).get<bool>();
+        if (decode_parms->contains(CommonNames::Columns))
+            columns = decode_parms->get_value(CommonNames::Columns).get<int>();
+        if (decode_parms->contains(CommonNames::Rows))
+            rows = decode_parms->get_value(CommonNames::Rows).get<int>();
+        if (decode_parms->contains(CommonNames::EndOfBlock))
+            end_of_block = decode_parms->get_value(CommonNames::EndOfBlock).get<bool>();
+        if (decode_parms->contains(CommonNames::BlackIs1))
+            black_is_1 = decode_parms->get_value(CommonNames::BlackIs1).get<bool>();
+        if (decode_parms->contains(CommonNames::DamagedRowsBeforeError))
+            damaged_rows_before_error = decode_parms->get_value(CommonNames::DamagedRowsBeforeError).get<int>();
+    }
+
+    // FIXME: This parameter seems crucial when reading its description, but we still
+    //        achieve to decode images that have it. Figure out what to do with it.
+    (void)end_of_block;
+
+    if (require_end_of_line || (encoded_byte_align && k != 0) || damaged_rows_before_error > 0)
+        return Error::rendering_unsupported_error("Unimplemented option for the CCITTFaxDecode Filter");
+
+    ByteBuffer decoded {};
+    if (k < 0) {
+        decoded = TRY(Gfx::CCITT::decode_ccitt_group4(bytes, columns, rows));
+    } else if (k == 0) {
+        Gfx::CCITT::Group3Options options {
+            .require_end_of_line = require_end_of_line ? Gfx::CCITT::Group3Options::RequireEndOfLine::Yes : Gfx::CCITT::Group3Options::RequireEndOfLine::No,
+            .encoded_byte_aligned = encoded_byte_align ? Gfx::CCITT::Group3Options::EncodedByteAligned::Yes : Gfx::CCITT::Group3Options::EncodedByteAligned::No,
+        };
+
+        decoded = TRY(Gfx::CCITT::decode_ccitt_group3(bytes, columns, rows, options));
+    } else {
+        return Error::rendering_unsupported_error("CCITTFaxDecode Filter Group 3, 2-D is unsupported");
+    }
+
+    if (!black_is_1)
+        invert_bits(decoded);
+
+    return decoded;
+}
+
+PDFErrorOr<ByteBuffer> Filter::decode_jbig2(Document* document, ReadonlyBytes bytes, RefPtr<DictObject> decode_parms)
+{
+    // 3.3.6 JBIG2Decode Filter
+    Vector<ReadonlyBytes> segments;
+    if (decode_parms) {
+        if (decode_parms->contains(CommonNames::JBIG2Globals)) {
+            auto globals = TRY(decode_parms->get_stream(document, CommonNames::JBIG2Globals));
+            segments.append(globals->bytes());
+        }
+    }
+
+    segments.append(bytes);
+    auto decoded = TRY(Gfx::JBIG2ImageDecoderPlugin::decode_embedded(segments));
+
+    // JBIG2 treats `1` as "ink present" (black) and `0` as "no ink" (white).
+    // PDF treats `1` as "light present" (white) and `1` as "no light" (black).
+    // So we have to invert.
+    invert_bits(decoded);
+
+    return decoded;
 }
 
 PDFErrorOr<ByteBuffer> Filter::decode_dct(ReadonlyBytes bytes)

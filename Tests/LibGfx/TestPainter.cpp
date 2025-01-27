@@ -38,11 +38,26 @@ TEST_CASE(draw_scaled_bitmap_with_transform)
     painter.draw_scaled_bitmap_with_transform(dest_rect, source_bitmap, source_rect, transform);
     for (int y = 0; y < bitmap->height(); ++y) {
         for (int x = 0; x < bitmap->width(); ++x) {
-            dbgln("{} {}: {}", x, y, bitmap->get_pixel(x, y));
             if (x >= 10 && x < 10 + 10 && y >= 20 && y < 20 + 5)
                 EXPECT_EQ(bitmap->get_pixel(x, y), Color::Black);
             else
                 EXPECT_EQ(bitmap->get_pixel(x, y), Color::White);
         }
     }
+}
+
+TEST_CASE(draw_rect_rough_bounds)
+{
+    auto bitmap = MUST(Gfx::Bitmap::create(Gfx::BitmapFormat::BGRx8888, { 10, 10 }));
+    Gfx::Painter painter(*bitmap);
+    painter.draw_rect(Gfx::IntRect(0, 0, 1, 1), Color::Black, true);
+    painter.draw_rect(Gfx::IntRect(9, 9, 1, 1), Color::Black, true);
+}
+
+TEST_CASE(draw_triangle_wave)
+{
+    auto bitmap = MUST(Gfx::Bitmap::create(Gfx::BitmapFormat::BGRx8888, { 10, 10 }));
+    Gfx::Painter painter(*bitmap);
+    for (int y = -3; y < bitmap->height() + 3; ++y)
+        painter.draw_triangle_wave({ 0, y }, { bitmap->width(), y }, Gfx::Color::Red, 3, 2);
 }

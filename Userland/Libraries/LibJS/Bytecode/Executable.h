@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2023, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021-2024, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -18,28 +18,21 @@
 #include <LibJS/Heap/Cell.h>
 #include <LibJS/Heap/CellAllocator.h>
 #include <LibJS/Runtime/EnvironmentCoordinate.h>
-
-namespace JS::JIT {
-class NativeExecutable;
-}
+#include <LibJS/SourceRange.h>
 
 namespace JS::Bytecode {
 
 struct PropertyLookupCache {
-    static FlatPtr shape_offset() { return OFFSET_OF(PropertyLookupCache, shape); }
-    static FlatPtr property_offset_offset() { return OFFSET_OF(PropertyLookupCache, property_offset); }
-
     WeakPtr<Shape> shape;
     Optional<u32> property_offset;
+    WeakPtr<Object> prototype;
+    WeakPtr<PrototypeChainValidity> prototype_chain_validity;
 };
 
 struct GlobalVariableCache : public PropertyLookupCache {
-    static FlatPtr environment_serial_number_offset() { return OFFSET_OF(GlobalVariableCache, environment_serial_number); }
-
     u64 environment_serial_number { 0 };
+    Optional<u32> environment_binding_index;
 };
-
-using EnvironmentVariableCache = Optional<EnvironmentCoordinate>;
 
 struct SourceRecord {
     u32 source_start_offset {};
@@ -52,43 +45,67 @@ class Executable final : public Cell {
 
 public:
     Executable(
+        Vector<u8> bytecode,
         NonnullOwnPtr<IdentifierTable>,
         NonnullOwnPtr<StringTable>,
         NonnullOwnPtr<RegexTable>,
+        Vector<Value> constants,
         NonnullRefPtr<SourceCode const>,
         size_t number_of_property_lookup_caches,
         size_t number_of_global_variable_caches,
-        size_t number_of_environment_variable_caches,
         size_t number_of_registers,
-        Vector<NonnullOwnPtr<BasicBlock>>,
         bool is_strict_mode);
 
     virtual ~Executable() override;
 
     DeprecatedFlyString name;
+    Vector<u8> bytecode;
     Vector<PropertyLookupCache> property_lookup_caches;
     Vector<GlobalVariableCache> global_variable_caches;
-    Vector<EnvironmentVariableCache> environment_variable_caches;
-    Vector<NonnullOwnPtr<BasicBlock>> basic_blocks;
     NonnullOwnPtr<StringTable> string_table;
     NonnullOwnPtr<IdentifierTable> identifier_table;
     NonnullOwnPtr<RegexTable> regex_table;
+    Vector<Value> constants;
 
     NonnullRefPtr<SourceCode const> source_code;
     size_t number_of_registers { 0 };
     bool is_strict_mode { false };
 
+    struct ExceptionHandlers {
+        size_t start_offset;
+        size_t end_offset;
+        Optional<size_t> handler_offset;
+        Optional<size_t> finalizer_offset;
+    };
+
+    Vector<ExceptionHandlers> exception_handlers;
+    Vector<size_t> basic_block_start_offsets;
+
+    HashMap<size_t, SourceRecord> source_map;
+
+    Vector<DeprecatedFlyString> local_variable_names;
+    size_t local_index_base { 0 };
+
+    Optional<IdentifierTableIndex> length_identifier;
+
     ByteString const& get_string(StringTableIndex index) const { return string_table->get(index); }
     DeprecatedFlyString const& get_identifier(IdentifierTableIndex index) const { return identifier_table->get(index); }
 
+    Optional<DeprecatedFlyString const&> get_identifier(Optional<IdentifierTableIndex> const& index) const
+    {
+        if (!index.has_value())
+            return {};
+        return get_identifier(*index);
+    }
+
+    [[nodiscard]] Optional<ExceptionHandlers const&> exception_handlers_for_offset(size_t offset) const;
+
+    [[nodiscard]] UnrealizedSourceRange source_range_at(size_t offset) const;
+
     void dump() const;
 
-    JIT::NativeExecutable const* get_or_create_native_executable();
-    JIT::NativeExecutable const* native_executable() const { return m_native_executable; }
-
 private:
-    OwnPtr<JIT::NativeExecutable> m_native_executable;
-    bool m_did_try_jitting { false };
+    virtual void visit_edges(Visitor&) override;
 };
 
 }

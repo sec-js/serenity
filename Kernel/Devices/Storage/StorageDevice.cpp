@@ -6,8 +6,9 @@
 
 #include <AK/StringView.h>
 #include <Kernel/API/Ioctl.h>
+#include <Kernel/API/MajorNumberAllocation.h>
 #include <Kernel/Debug.h>
-#include <Kernel/Devices/DeviceManagement.h>
+#include <Kernel/Devices/Device.h>
 #include <Kernel/Devices/Storage/StorageDevice.h>
 #include <Kernel/Devices/Storage/StorageManagement.h>
 #include <Kernel/FileSystem/OpenFileDescription.h>
@@ -19,16 +20,7 @@
 namespace Kernel {
 
 StorageDevice::StorageDevice(LUNAddress logical_unit_number_address, u32 hardware_relative_controller_id, size_t sector_size, u64 max_addressable_block)
-    : BlockDevice(StorageManagement::storage_type_major_number(), StorageManagement::generate_storage_minor_number(), sector_size)
-    , m_logical_unit_number_address(logical_unit_number_address)
-    , m_hardware_relative_controller_id(hardware_relative_controller_id)
-    , m_max_addressable_block(max_addressable_block)
-    , m_blocks_per_page(PAGE_SIZE / block_size())
-{
-}
-
-StorageDevice::StorageDevice(Badge<RamdiskDevice>, LUNAddress logical_unit_number_address, u32 hardware_relative_controller_id, MajorNumber major, MinorNumber minor, size_t sector_size, u64 max_addressable_block)
-    : BlockDevice(major, minor, sector_size)
+    : BlockDevice(MajorAllocation::BlockDeviceFamily::Storage, StorageManagement::generate_storage_minor_number(), sector_size)
     , m_logical_unit_number_address(logical_unit_number_address)
     , m_hardware_relative_controller_id(hardware_relative_controller_id)
     , m_max_addressable_block(max_addressable_block)
@@ -85,10 +77,14 @@ StringView StorageDevice::command_set_to_string_view() const
 
 ErrorOr<size_t> StorageDevice::read(OpenFileDescription&, u64 offset, UserOrKernelBuffer& outbuf, size_t len)
 {
+    // NOTE: The last available offset is actually just after the last addressable block.
+    if (offset >= (max_mathematical_addressable_block() * block_size()))
+        return 0;
+    size_t nread = min(static_cast<size_t>((max_mathematical_addressable_block() * block_size()) - offset), len);
     u64 index = offset >> block_size_log();
     off_t offset_within_block = 0;
-    size_t whole_blocks = len >> block_size_log();
-    size_t remaining = len - (whole_blocks << block_size_log());
+    size_t whole_blocks = nread >> block_size_log();
+    size_t remaining = nread - (whole_blocks << block_size_log());
 
     // PATAChannel will chuck a wobbly if we try to read more than PAGE_SIZE
     // at a time, because it uses a single page for its DMA buffer.
@@ -97,7 +93,7 @@ ErrorOr<size_t> StorageDevice::read(OpenFileDescription&, u64 offset, UserOrKern
         remaining = 0;
     }
 
-    if (len < block_size())
+    if (nread < block_size())
         offset_within_block = offset - (index << block_size_log());
 
     dbgln_if(STORAGE_DEVICE_DEBUG, "StorageDevice::read() index={}, whole_blocks={}, remaining={}", index, whole_blocks, remaining);
@@ -144,17 +140,16 @@ ErrorOr<size_t> StorageDevice::read(OpenFileDescription&, u64 offset, UserOrKern
     return pos + remaining;
 }
 
-bool StorageDevice::can_read(OpenFileDescription const&, u64 offset) const
-{
-    return offset < (max_addressable_block() * block_size());
-}
-
 ErrorOr<size_t> StorageDevice::write(OpenFileDescription&, u64 offset, UserOrKernelBuffer const& inbuf, size_t len)
 {
+    // NOTE: The last available offset is actually just after the last addressable block.
+    if (offset >= (max_mathematical_addressable_block() * block_size()))
+        return Error::from_errno(ENOSPC);
+    size_t nwrite = min(static_cast<size_t>((max_mathematical_addressable_block() * block_size()) - offset), len);
     u64 index = offset >> block_size_log();
     off_t offset_within_block = 0;
-    size_t whole_blocks = len >> block_size_log();
-    size_t remaining = len - (whole_blocks << block_size_log());
+    size_t whole_blocks = nwrite >> block_size_log();
+    size_t remaining = nwrite - (whole_blocks << block_size_log());
 
     // PATAChannel will chuck a wobbly if we try to write more than PAGE_SIZE
     // at a time, because it uses a single page for its DMA buffer.
@@ -163,7 +158,7 @@ ErrorOr<size_t> StorageDevice::write(OpenFileDescription&, u64 offset, UserOrKer
         remaining = 0;
     }
 
-    if (len < block_size())
+    if (nwrite < block_size())
         offset_within_block = offset - (index << block_size_log());
 
     // We try to allocate the temporary block buffer for partial writes *before* we start any full block writes,
@@ -239,16 +234,11 @@ ErrorOr<size_t> StorageDevice::write(OpenFileDescription&, u64 offset, UserOrKer
     return pos + remaining;
 }
 
-bool StorageDevice::can_write(OpenFileDescription const&, u64 offset) const
-{
-    return offset < (max_addressable_block() * block_size());
-}
-
 ErrorOr<void> StorageDevice::ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg)
 {
     switch (request) {
     case STORAGE_DEVICE_GET_SIZE: {
-        u64 disk_size = m_max_addressable_block * block_size();
+        u64 disk_size = max_mathematical_addressable_block() * block_size();
         return copy_to_user(static_ptr_cast<u64*>(arg), &disk_size);
         break;
     }

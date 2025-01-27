@@ -1,9 +1,9 @@
 #!/usr/bin/env -S bash ../.port_include.sh
 port='libjodycode'
-version='3.1'
+version='3.1.1'
 files=(
-    "https://github.com/jbruchon/libjodycode/archive/refs/tags/v${version}.tar.gz#c72974eb1d38873e06ea84b3d78990f87192f0113da5bd13fcac6bbc6a6e2184"
+    "https://codeberg.org/jbruchon/libjodycode/archive/v${version}.tar.gz#82717625b91f92ea4e7435798385762c6906835fa2cf2c80c9f83d6734bfddad"
 )
 auth_type='sha256'
-workdir="libjodycode-${version}"
+workdir='libjodycode'
 makeopts=("UNAME_S=serenity UNAME_M=${SERENITY_ARCH} CROSS_DETECT=cross")

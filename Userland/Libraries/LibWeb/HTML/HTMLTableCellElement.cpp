@@ -1,17 +1,20 @@
 /*
  * Copyright (c) 2020-2022, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2024, Jamie Mansfield <jmansfield@cadixdev.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLTableCellElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/StyleProperties.h>
-#include <LibWeb/CSS/StyleValues/ColorStyleValue.h>
-#include <LibWeb/CSS/StyleValues/IdentifierStyleValue.h>
+#include <LibWeb/CSS/StyleValues/CSSColorValue.h>
+#include <LibWeb/CSS/StyleValues/CSSKeywordValue.h>
 #include <LibWeb/CSS/StyleValues/ImageStyleValue.h>
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/DOM/HTMLCollection.h>
 #include <LibWeb/HTML/HTMLTableCellElement.h>
 #include <LibWeb/HTML/HTMLTableElement.h>
 #include <LibWeb/HTML/Numbers.h>
@@ -31,15 +34,7 @@ HTMLTableCellElement::~HTMLTableCellElement() = default;
 void HTMLTableCellElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLTableCellElementPrototype>(realm, "HTMLTableCellElement"_fly_string));
-}
-
-static const HTML::HTMLTableElement& table_containing_cell(const HTML::HTMLTableCellElement& node)
-{
-    auto parent_node = node.parent();
-    while (!is<HTML::HTMLTableElement>(parent_node))
-        parent_node = parent_node->parent();
-    return static_cast<const HTML::HTMLTableElement&>(*parent_node);
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLTableCellElement);
 }
 
 void HTMLTableCellElement::apply_presentational_hints(CSS::StyleProperties& style) const
@@ -49,7 +44,7 @@ void HTMLTableCellElement::apply_presentational_hints(CSS::StyleProperties& styl
             // https://html.spec.whatwg.org/multipage/rendering.html#tables-2:rules-for-parsing-a-legacy-colour-value
             auto color = parse_legacy_color_value(value);
             if (color.has_value())
-                style.set_property(CSS::PropertyID::BackgroundColor, CSS::ColorStyleValue::create(color.value()));
+                style.set_property(CSS::PropertyID::BackgroundColor, CSS::CSSColorValue::create_from_color(color.value()));
             return;
         }
         if (name == HTML::AttributeNames::valign) {
@@ -59,11 +54,11 @@ void HTMLTableCellElement::apply_presentational_hints(CSS::StyleProperties& styl
         }
         if (name == HTML::AttributeNames::align) {
             if (value.equals_ignoring_ascii_case("center"sv) || value.equals_ignoring_ascii_case("middle"sv)) {
-                style.set_property(CSS::PropertyID::TextAlign, CSS::IdentifierStyleValue::create(CSS::ValueID::LibwebCenter));
+                style.set_property(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::LibwebCenter));
             } else if (value.equals_ignoring_ascii_case("left"sv)) {
-                style.set_property(CSS::PropertyID::TextAlign, CSS::IdentifierStyleValue::create(CSS::ValueID::LibwebLeft));
+                style.set_property(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::LibwebLeft));
             } else if (value.equals_ignoring_ascii_case("right"sv)) {
-                style.set_property(CSS::PropertyID::TextAlign, CSS::IdentifierStyleValue::create(CSS::ValueID::LibwebRight));
+                style.set_property(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::LibwebRight));
             } else {
                 if (auto parsed_value = parse_css_value(CSS::Parser::ParsingContext { document() }, value, CSS::PropertyID::TextAlign))
                     style.set_property(CSS::PropertyID::TextAlign, parsed_value.release_nonnull());
@@ -84,23 +79,26 @@ void HTMLTableCellElement::apply_presentational_hints(CSS::StyleProperties& styl
             return;
         }
     });
-    auto const& table_element = table_containing_cell(*this);
 
-    if (auto padding = table_element.padding()) {
+    auto const table_element = first_ancestor_of_type<HTMLTableElement>();
+    if (!table_element)
+        return;
+
+    if (auto padding = table_element->padding()) {
         style.set_property(CSS::PropertyID::PaddingTop, CSS::LengthStyleValue::create(CSS::Length::make_px(padding)));
         style.set_property(CSS::PropertyID::PaddingBottom, CSS::LengthStyleValue::create(CSS::Length::make_px(padding)));
         style.set_property(CSS::PropertyID::PaddingLeft, CSS::LengthStyleValue::create(CSS::Length::make_px(padding)));
         style.set_property(CSS::PropertyID::PaddingRight, CSS::LengthStyleValue::create(CSS::Length::make_px(padding)));
     }
 
-    auto border = table_element.border();
+    auto border = table_element->border();
 
     if (!border)
         return;
     auto apply_border_style = [&](CSS::PropertyID style_property, CSS::PropertyID width_property, CSS::PropertyID color_property) {
-        style.set_property(style_property, CSS::IdentifierStyleValue::create(CSS::ValueID::Inset));
+        style.set_property(style_property, CSS::CSSKeywordValue::create(CSS::Keyword::Inset));
         style.set_property(width_property, CSS::LengthStyleValue::create(CSS::Length::make_px(1)));
-        style.set_property(color_property, table_element.computed_css_values()->property(color_property));
+        style.set_property(color_property, table_element->computed_css_values()->property(color_property));
     };
     apply_border_style(CSS::PropertyID::BorderLeftStyle, CSS::PropertyID::BorderLeftWidth, CSS::PropertyID::BorderLeftColor);
     apply_border_style(CSS::PropertyID::BorderTopStyle, CSS::PropertyID::BorderTopWidth, CSS::PropertyID::BorderTopColor);
@@ -131,7 +129,7 @@ unsigned int HTMLTableCellElement::col_span() const
 
 WebIDL::ExceptionOr<void> HTMLTableCellElement::set_col_span(unsigned int value)
 {
-    return set_attribute(HTML::AttributeNames::colspan, MUST(String::number(value)));
+    return set_attribute(HTML::AttributeNames::colspan, String::number(value));
 }
 
 // This implements step 9 in the spec here:
@@ -151,7 +149,25 @@ unsigned int HTMLTableCellElement::row_span() const
 
 WebIDL::ExceptionOr<void> HTMLTableCellElement::set_row_span(unsigned int value)
 {
-    return set_attribute(HTML::AttributeNames::rowspan, MUST(String::number(value)));
+    return set_attribute(HTML::AttributeNames::rowspan, String::number(value));
+}
+
+// https://html.spec.whatwg.org/multipage/tables.html#dom-tdth-cellindex
+WebIDL::Long HTMLTableCellElement::cell_index() const
+{
+    // The cellIndex IDL attribute must, if the element has a parent tr element, return the index of the cell's
+    // element in the parent element's cells collection. If there is no such parent element, then the attribute
+    // must return −1.
+    auto const* parent = first_ancestor_of_type<HTMLTableRowElement>();
+    if (!parent)
+        return -1;
+
+    auto rows = parent->cells()->collect_matching_elements();
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (rows[i] == this)
+            return i;
+    }
+    return -1;
 }
 
 Optional<ARIA::Role> HTMLTableCellElement::default_role() const

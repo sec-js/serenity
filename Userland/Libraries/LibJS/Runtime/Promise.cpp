@@ -300,7 +300,7 @@ Value Promise::perform_then(Value on_fulfilled, Value on_rejected, GCPtr<Promise
 
     // 3. If IsCallable(onFulfilled) is false, then
     //     a. Let onFulfilledJobCallback be empty.
-    Optional<JobCallback> on_fulfilled_job_callback;
+    GCPtr<JobCallback> on_fulfilled_job_callback;
 
     // 4. Else,
     if (on_fulfilled.is_function()) {
@@ -311,7 +311,7 @@ Value Promise::perform_then(Value on_fulfilled, Value on_rejected, GCPtr<Promise
 
     // 5. If IsCallable(onRejected) is false, then
     //     a. Let onRejectedJobCallback be empty.
-    Optional<JobCallback> on_rejected_job_callback;
+    GCPtr<JobCallback> on_rejected_job_callback;
 
     // 6. Else,
     if (on_rejected.is_function()) {
@@ -395,10 +395,8 @@ void Promise::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_result);
-    for (auto& reaction : m_fulfill_reactions)
-        visitor.visit(reaction);
-    for (auto& reaction : m_reject_reactions)
-        visitor.visit(reaction);
+    visitor.visit(m_fulfill_reactions);
+    visitor.visit(m_reject_reactions);
 }
 
 }

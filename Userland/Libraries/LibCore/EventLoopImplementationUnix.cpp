@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/IDAllocator.h>
+#include <AK/BinaryHeap.h>
 #include <AK/Singleton.h>
 #include <AK/TemporaryChange.h>
 #include <AK/Time.h>
@@ -16,43 +16,253 @@
 #include <LibCore/Socket.h>
 #include <LibCore/System.h>
 #include <LibCore/ThreadEventQueue.h>
+#include <pthread.h>
 #include <sys/select.h>
 #include <unistd.h>
 
 namespace Core {
 
-struct ThreadData;
-
 namespace {
-thread_local ThreadData* s_thread_data;
+struct ThreadData;
+class TimeoutSet;
+
+HashMap<pthread_t, ThreadData*> s_thread_data;
+pthread_key_t s_thread_key;
+static pthread_rwlock_t s_thread_data_lock_impl;
+static pthread_rwlock_t* s_thread_data_lock = nullptr;
+thread_local pthread_t s_thread_id;
+thread_local OwnPtr<ThreadData> s_this_thread_data;
+
+short notification_type_to_poll_events(NotificationType type)
+{
+    short events = 0;
+    if (has_flag(type, NotificationType::Read))
+        events |= POLLIN;
+    if (has_flag(type, NotificationType::Write))
+        events |= POLLOUT;
+    return events;
 }
 
-struct EventLoopTimer {
-    int timer_id { 0 };
+bool has_flag(int value, int flag)
+{
+    return (value & flag) == flag;
+}
+
+class EventLoopTimeout {
+public:
+    static constexpr ssize_t INVALID_INDEX = NumericLimits<ssize_t>::max();
+
+    EventLoopTimeout() { }
+    virtual ~EventLoopTimeout() = default;
+
+    virtual void fire(TimeoutSet& timeout_set, MonotonicTime time) = 0;
+
+    MonotonicTime fire_time() const { return m_fire_time; }
+
+    void absolutize(Badge<TimeoutSet>, MonotonicTime current_time)
+    {
+        m_fire_time = current_time + m_duration;
+    }
+
+    ssize_t& index(Badge<TimeoutSet>) { return m_index; }
+    void set_index(Badge<TimeoutSet>, ssize_t index) { m_index = index; }
+
+    bool is_scheduled() const { return m_index != INVALID_INDEX; }
+
+protected:
+    union {
+        Duration m_duration;
+        MonotonicTime m_fire_time;
+    };
+
+private:
+    ssize_t m_index = INVALID_INDEX;
+};
+
+class TimeoutSet {
+public:
+    TimeoutSet() = default;
+
+    Optional<MonotonicTime> next_timer_expiration()
+    {
+        if (!m_heap.is_empty()) {
+            return m_heap.peek_min()->fire_time();
+        } else {
+            return {};
+        }
+    }
+
+    void absolutize_relative_timeouts(MonotonicTime current_time)
+    {
+        for (auto timeout : m_scheduled_timeouts) {
+            timeout->absolutize({}, current_time);
+            m_heap.insert(timeout);
+        }
+        m_scheduled_timeouts.clear();
+    }
+
+    size_t fire_expired(MonotonicTime current_time)
+    {
+        size_t fired_count = 0;
+        while (!m_heap.is_empty()) {
+            auto& timeout = *m_heap.peek_min();
+
+            if (timeout.fire_time() <= current_time) {
+                ++fired_count;
+                m_heap.pop_min();
+                timeout.set_index({}, EventLoopTimeout::INVALID_INDEX);
+                timeout.fire(*this, current_time);
+            } else {
+                break;
+            }
+        }
+        return fired_count;
+    }
+
+    void schedule_relative(EventLoopTimeout* timeout)
+    {
+        timeout->set_index({}, -1 - static_cast<ssize_t>(m_scheduled_timeouts.size()));
+        m_scheduled_timeouts.append(timeout);
+    }
+
+    void schedule_absolute(EventLoopTimeout* timeout)
+    {
+        m_heap.insert(timeout);
+    }
+
+    void unschedule(EventLoopTimeout* timeout)
+    {
+        if (timeout->index({}) < 0) {
+            size_t i = -1 - timeout->index({});
+            size_t j = m_scheduled_timeouts.size() - 1;
+            VERIFY(m_scheduled_timeouts[i] == timeout);
+            swap(m_scheduled_timeouts[i], m_scheduled_timeouts[j]);
+            swap(m_scheduled_timeouts[i]->index({}), m_scheduled_timeouts[j]->index({}));
+            (void)m_scheduled_timeouts.take_last();
+        } else {
+            m_heap.pop(timeout->index({}));
+        }
+        timeout->set_index({}, EventLoopTimeout::INVALID_INDEX);
+    }
+
+    void clear()
+    {
+        for (auto* timeout : m_heap.nodes_in_arbitrary_order())
+            timeout->set_index({}, EventLoopTimeout::INVALID_INDEX);
+        m_heap.clear();
+        for (auto* timeout : m_scheduled_timeouts)
+            timeout->set_index({}, EventLoopTimeout::INVALID_INDEX);
+        m_scheduled_timeouts.clear();
+    }
+
+private:
+    IntrusiveBinaryHeap<
+        EventLoopTimeout*,
+        decltype([](EventLoopTimeout* a, EventLoopTimeout* b) {
+            return a->fire_time() < b->fire_time();
+        }),
+        decltype([](EventLoopTimeout* timeout, size_t index) {
+            timeout->set_index({}, static_cast<ssize_t>(index));
+        }),
+        8>
+        m_heap;
+    Vector<EventLoopTimeout*, 8> m_scheduled_timeouts;
+};
+
+class EventLoopTimer final : public EventLoopTimeout {
+public:
+    EventLoopTimer() = default;
+
+    void reload(MonotonicTime const& now) { m_fire_time = now + interval; }
+
+    virtual void fire(TimeoutSet& timeout_set, MonotonicTime current_time) override
+    {
+        auto strong_owner = owner.strong_ref();
+
+        if (!strong_owner)
+            return;
+
+        if (should_reload) {
+            MonotonicTime next_fire_time = m_fire_time + interval;
+            if (next_fire_time <= current_time) {
+                next_fire_time = current_time + interval;
+            }
+            m_fire_time = next_fire_time;
+            if (next_fire_time != current_time) {
+                timeout_set.schedule_absolute(this);
+            } else {
+                // NOTE: Unfortunately we need to treat timeouts with the zero interval in a
+                //       special way. TimeoutSet::schedule_absolute for them will result in an
+                //       infinite loop. TimeoutSet::schedule_relative, on the other hand, will do a
+                //       correct thing of scheduling them for the next iteration of the loop.
+                m_duration = {};
+                timeout_set.schedule_relative(this);
+            }
+        }
+
+        // FIXME: While TimerShouldFireWhenNotVisible::Yes prevents the timer callback from being
+        //        called, it doesn't allow event loop to sleep since it needs to constantly check if
+        //        is_visible_for_timer_purposes changed. A better solution will be to unregister a
+        //        timer and register it back again when needed. This also has an added benefit of
+        //        making fire_when_not_visible and is_visible_for_timer_purposes obsolete.
+        if (fire_when_not_visible == TimerShouldFireWhenNotVisible::Yes || strong_owner->is_visible_for_timer_purposes())
+            ThreadEventQueue::current().post_event(*strong_owner, make<TimerEvent>());
+    }
+
     Duration interval;
-    MonotonicTime fire_time { MonotonicTime::now_coarse() };
     bool should_reload { false };
     TimerShouldFireWhenNotVisible fire_when_not_visible { TimerShouldFireWhenNotVisible::No };
     WeakPtr<EventReceiver> owner;
-
-    void reload(MonotonicTime const& now) { fire_time = now + interval; }
-    bool has_expired(MonotonicTime const& now) const { return now > fire_time; }
+    pthread_t owner_thread { 0 };
+    Atomic<bool> is_being_deleted { false };
 };
 
 struct ThreadData {
     static ThreadData& the()
     {
-        if (!s_thread_data) {
-            // FIXME: Don't leak this.
-            s_thread_data = new ThreadData;
+        if (!s_thread_data_lock) {
+            pthread_rwlock_init(&s_thread_data_lock_impl, nullptr);
+            s_thread_data_lock = &s_thread_data_lock_impl;
+            pthread_key_create(&s_thread_key, [](void*) {
+                s_this_thread_data.clear();
+            });
         }
-        return *s_thread_data;
+
+        if (s_thread_id == 0)
+            s_thread_id = pthread_self();
+        ThreadData* data = nullptr;
+        if (!s_this_thread_data) {
+            data = new ThreadData;
+            s_this_thread_data = adopt_own(*data);
+
+            pthread_rwlock_wrlock(&*s_thread_data_lock);
+            s_thread_data.set(s_thread_id, s_this_thread_data.ptr());
+            pthread_rwlock_unlock(&*s_thread_data_lock);
+        } else {
+            data = s_this_thread_data.ptr();
+        }
+        return *data;
+    }
+
+    static ThreadData* for_thread(pthread_t thread_id)
+    {
+        pthread_rwlock_rdlock(&*s_thread_data_lock);
+        auto result = s_thread_data.get(thread_id).value_or(nullptr);
+        pthread_rwlock_unlock(&*s_thread_data_lock);
+        return result;
     }
 
     ThreadData()
     {
         pid = getpid();
         initialize_wake_pipe();
+    }
+
+    ~ThreadData()
+    {
+        pthread_rwlock_wrlock(&*s_thread_data_lock);
+        s_thread_data.remove(s_thread_id);
+        pthread_rwlock_unlock(&*s_thread_data_lock);
     }
 
     void initialize_wake_pipe()
@@ -62,32 +272,37 @@ struct ThreadData {
         if (wake_pipe_fds[1] != -1)
             close(wake_pipe_fds[1]);
 
-#if defined(SOCK_NONBLOCK)
-        int rc = pipe2(wake_pipe_fds, O_CLOEXEC);
-#else
-        int rc = pipe(wake_pipe_fds);
-        fcntl(wake_pipe_fds[0], F_SETFD, FD_CLOEXEC);
-        fcntl(wake_pipe_fds[1], F_SETFD, FD_CLOEXEC);
+        auto result = Core::System::pipe2(O_CLOEXEC);
+        if (result.is_error()) {
+            warnln("\033[31;1mFailed to create event loop pipe:\033[0m {}", result.error());
+            VERIFY_NOT_REACHED();
+        }
 
-#endif
-        VERIFY(rc == 0);
+        wake_pipe_fds = result.release_value();
+
+        // The wake pipe informs us of POSIX signals as well as manual calls to wake()
+        VERIFY(poll_fds.size() == 0);
+        poll_fds.append({ .fd = wake_pipe_fds[0], .events = POLLIN, .revents = 0 });
+        notifier_by_index.append(nullptr);
     }
 
     // Each thread has its own timers, notifiers and a wake pipe.
-    HashMap<int, NonnullOwnPtr<EventLoopTimer>> timers;
-    HashTable<Notifier*> notifiers;
+    TimeoutSet timeouts;
+
+    Vector<pollfd> poll_fds;
+    HashMap<Notifier*, size_t> notifier_by_ptr;
+    Vector<Notifier*> notifier_by_index;
 
     // The wake pipe is used to notify another event loop that someone has called wake(), or a signal has been received.
     // wake() writes 0i32 into the pipe, signals write the signal number (guaranteed non-zero).
-    int wake_pipe_fds[2] { -1, -1 };
+    Array<int, 2> wake_pipe_fds { -1, -1 };
 
     pid_t pid { 0 };
-
-    IDAllocator id_allocator;
 };
+}
 
 EventLoopImplementationUnix::EventLoopImplementationUnix()
-    : m_wake_pipe_fds(&ThreadData::the().wake_pipe_fds)
+    : m_wake_pipe_fds(ThreadData::the().wake_pipe_fds)
 {
 }
 
@@ -136,49 +351,31 @@ void EventLoopImplementationUnix::post_event(EventReceiver& receiver, NonnullOwn
 void EventLoopImplementationUnix::wake()
 {
     int wake_event = 0;
-    MUST(Core::System::write((*m_wake_pipe_fds)[1], { &wake_event, sizeof(wake_event) }));
+    MUST(Core::System::write(m_wake_pipe_fds[1], { &wake_event, sizeof(wake_event) }));
 }
 
 void EventLoopManagerUnix::wait_for_events(EventLoopImplementation::PumpMode mode)
 {
     auto& thread_data = ThreadData::the();
 
-    fd_set read_fds {};
-    fd_set write_fds {};
 retry:
-    int max_fd = 0;
-    auto add_fd_to_set = [&max_fd](int fd, fd_set& set) {
-        FD_SET(fd, &set);
-        if (fd > max_fd)
-            max_fd = fd;
-    };
-
-    // The wake pipe informs us of POSIX signals as well as manual calls to wake()
-    add_fd_to_set(thread_data.wake_pipe_fds[0], read_fds);
-
-    for (auto& notifier : thread_data.notifiers) {
-        if (notifier->type() == Notifier::Type::Read)
-            add_fd_to_set(notifier->fd(), read_fds);
-        if (notifier->type() == Notifier::Type::Write)
-            add_fd_to_set(notifier->fd(), write_fds);
-        if (notifier->type() == Notifier::Type::Exceptional)
-            TODO();
-    }
-
     bool has_pending_events = ThreadEventQueue::current().has_pending_events();
+
+    auto time_at_iteration_start = MonotonicTime::now_coarse();
+    thread_data.timeouts.absolutize_relative_timeouts(time_at_iteration_start);
 
     // Figure out how long to wait at maximum.
     // This mainly depends on the PumpMode and whether we have pending events, but also the next expiring timer.
-    struct timeval timeout = { 0, 0 };
+    int timeout = 0;
     bool should_wait_forever = false;
     if (mode == EventLoopImplementation::PumpMode::WaitForEvents && !has_pending_events) {
-        auto next_timer_expiration = get_next_timer_expiration();
+        auto next_timer_expiration = thread_data.timeouts.next_timer_expiration();
         if (next_timer_expiration.has_value()) {
-            auto now = MonotonicTime::now_coarse();
-            auto computed_timeout = next_timer_expiration.value() - now;
+            auto computed_timeout = next_timer_expiration.value() - time_at_iteration_start;
             if (computed_timeout.is_negative())
                 computed_timeout = Duration::zero();
-            timeout = computed_timeout.to_timeval();
+            i64 true_timeout = computed_timeout.to_milliseconds();
+            timeout = static_cast<i32>(min<i64>(AK::NumericLimits<i32>::max(), true_timeout));
         } else {
             should_wait_forever = true;
         }
@@ -186,19 +383,19 @@ retry:
 
 try_select_again:
     // select() and wait for file system events, calls to wake(), POSIX signals, or timer expirations.
-    int marked_fd_count = select(max_fd + 1, &read_fds, &write_fds, nullptr, should_wait_forever ? nullptr : &timeout);
+    ErrorOr<int> error_or_marked_fd_count = System::poll(thread_data.poll_fds, should_wait_forever ? -1 : timeout);
+    auto time_after_poll = MonotonicTime::now_coarse();
     // Because POSIX, we might spuriously return from select() with EINTR; just select again.
-    if (marked_fd_count < 0) {
-        int saved_errno = errno;
-        if (saved_errno == EINTR)
+    if (error_or_marked_fd_count.is_error()) {
+        if (error_or_marked_fd_count.error().code() == EINTR)
             goto try_select_again;
-        dbgln("EventLoopImplementationUnix::wait_for_events: {} ({}: {})", marked_fd_count, saved_errno, strerror(saved_errno));
+        dbgln("EventLoopImplementationUnix::wait_for_events: {}", error_or_marked_fd_count.error());
         VERIFY_NOT_REACHED();
     }
 
     // We woke up due to a call to wake() or a POSIX signal.
     // Handle signals and see whether we need to handle events as well.
-    if (FD_ISSET(thread_data.wake_pipe_fds[0], &read_fds)) {
+    if (has_flag(thread_data.poll_fds[0].revents, POLLIN)) {
         int wake_events[8];
         ssize_t nread;
         // We might receive another signal while read()ing here. The signal will go to the handle_signal properly,
@@ -227,43 +424,29 @@ try_select_again:
             goto retry;
     }
 
+    if (error_or_marked_fd_count.value() != 0) {
+        // Handle file system notifiers by making them normal events.
+        for (size_t i = 1; i < thread_data.poll_fds.size(); ++i) {
+            auto& revents = thread_data.poll_fds[i].revents;
+            auto& notifier = *thread_data.notifier_by_index[i];
+
+            NotificationType type = NotificationType::None;
+            if (has_flag(revents, POLLIN))
+                type |= NotificationType::Read;
+            if (has_flag(revents, POLLOUT))
+                type |= NotificationType::Write;
+            if (has_flag(revents, POLLHUP))
+                type |= NotificationType::HangUp;
+            if (has_flag(revents, POLLERR))
+                type |= NotificationType::Error;
+            type &= notifier.type();
+            if (type != NotificationType::None)
+                ThreadEventQueue::current().post_event(notifier, make<NotifierActivationEvent>(notifier.fd(), type));
+        }
+    }
+
     // Handle expired timers.
-    if (!thread_data.timers.is_empty()) {
-        auto now = MonotonicTime::now_coarse();
-
-        for (auto& it : thread_data.timers) {
-            auto& timer = *it.value;
-            if (!timer.has_expired(now))
-                continue;
-            auto owner = timer.owner.strong_ref();
-            if (timer.fire_when_not_visible == TimerShouldFireWhenNotVisible::No
-                && owner && !owner->is_visible_for_timer_purposes()) {
-                continue;
-            }
-
-            if (owner)
-                ThreadEventQueue::current().post_event(*owner, make<TimerEvent>(timer.timer_id));
-            if (timer.should_reload) {
-                timer.reload(now);
-            } else {
-                // FIXME: Support removing expired timers that don't want to reload.
-                VERIFY_NOT_REACHED();
-            }
-        }
-    }
-
-    if (!marked_fd_count)
-        return;
-
-    // Handle file system notifiers by making them normal events.
-    for (auto& notifier : thread_data.notifiers) {
-        if (notifier->type() == Notifier::Type::Read && FD_ISSET(notifier->fd(), &read_fds)) {
-            ThreadEventQueue::current().post_event(*notifier, make<NotifierActivationEvent>(notifier->fd()));
-        }
-        if (notifier->type() == Notifier::Type::Write && FD_ISSET(notifier->fd(), &write_fds)) {
-            ThreadEventQueue::current().post_event(*notifier, make<NotifierActivationEvent>(notifier->fd()));
-        }
-    }
+    thread_data.timeouts.fire_expired(time_after_poll);
 }
 
 class SignalHandlers : public RefCounted<SignalHandlers> {
@@ -336,35 +519,16 @@ void EventLoopManagerUnix::dispatch_signal(int signal_number)
 void EventLoopImplementationUnix::notify_forked_and_in_child()
 {
     auto& thread_data = ThreadData::the();
-    thread_data.timers.clear();
-    thread_data.notifiers.clear();
+    thread_data.timeouts.clear();
+    thread_data.poll_fds.clear();
+    thread_data.notifier_by_ptr.clear();
+    thread_data.notifier_by_index.clear();
     thread_data.initialize_wake_pipe();
     if (auto* info = signals_info<false>()) {
         info->signal_handlers.clear();
         info->next_signal_id = 0;
     }
     thread_data.pid = getpid();
-}
-
-Optional<MonotonicTime> EventLoopManagerUnix::get_next_timer_expiration()
-{
-    auto now = MonotonicTime::now_coarse();
-    Optional<MonotonicTime> soonest {};
-    for (auto& it : ThreadData::the().timers) {
-        auto& fire_time = it.value->fire_time;
-        auto owner = it.value->owner.strong_ref();
-        if (it.value->fire_when_not_visible == TimerShouldFireWhenNotVisible::No
-            && owner && !owner->is_visible_for_timer_purposes()) {
-            continue;
-        }
-        // OPTIMIZATION: If we have a timer that needs to fire right away, we can stop looking here.
-        // FIXME: This whole operation could be O(1) with a better data structure.
-        if (fire_time < now)
-            return now;
-        if (!soonest.has_value() || fire_time < soonest.value())
-            soonest = fire_time;
-    }
-    return soonest;
 }
 
 SignalHandlers::SignalHandlers(int signal_number, void (*handle_signal)(int))
@@ -480,37 +644,71 @@ void EventLoopManagerUnix::unregister_signal(int handler_id)
         info.signal_handlers.remove(remove_signal_number);
 }
 
-int EventLoopManagerUnix::register_timer(EventReceiver& object, int milliseconds, bool should_reload, TimerShouldFireWhenNotVisible fire_when_not_visible)
+intptr_t EventLoopManagerUnix::register_timer(EventReceiver& object, int milliseconds, bool should_reload, TimerShouldFireWhenNotVisible fire_when_not_visible)
 {
     VERIFY(milliseconds >= 0);
     auto& thread_data = ThreadData::the();
-    auto timer = make<EventLoopTimer>();
+    auto timer = new EventLoopTimer;
+    timer->owner_thread = s_thread_id;
     timer->owner = object;
     timer->interval = Duration::from_milliseconds(milliseconds);
     timer->reload(MonotonicTime::now_coarse());
     timer->should_reload = should_reload;
     timer->fire_when_not_visible = fire_when_not_visible;
-    int timer_id = thread_data.id_allocator.allocate();
-    timer->timer_id = timer_id;
-    thread_data.timers.set(timer_id, move(timer));
-    return timer_id;
+    thread_data.timeouts.schedule_absolute(timer);
+    return bit_cast<intptr_t>(timer);
 }
 
-bool EventLoopManagerUnix::unregister_timer(int timer_id)
+void EventLoopManagerUnix::unregister_timer(intptr_t timer_id)
 {
-    auto& thread_data = ThreadData::the();
-    thread_data.id_allocator.deallocate(timer_id);
-    return thread_data.timers.remove(timer_id);
+    auto* timer = bit_cast<EventLoopTimer*>(timer_id);
+    auto thread_data_ptr = ThreadData::for_thread(timer->owner_thread);
+    if (!thread_data_ptr)
+        return;
+    auto& thread_data = *thread_data_ptr;
+    auto expected = false;
+    if (timer->is_being_deleted.compare_exchange_strong(expected, true, AK::MemoryOrder::memory_order_acq_rel)) {
+        if (timer->is_scheduled())
+            thread_data.timeouts.unschedule(timer);
+        delete timer;
+    }
 }
 
 void EventLoopManagerUnix::register_notifier(Notifier& notifier)
 {
-    ThreadData::the().notifiers.set(&notifier);
+    auto& thread_data = ThreadData::the();
+
+    thread_data.notifier_by_ptr.set(&notifier, thread_data.poll_fds.size());
+    thread_data.notifier_by_index.append(&notifier);
+    thread_data.poll_fds.append({
+        .fd = notifier.fd(),
+        .events = notification_type_to_poll_events(notifier.type()),
+        .revents = 0,
+    });
+
+    notifier.set_owner_thread(s_thread_id);
 }
 
 void EventLoopManagerUnix::unregister_notifier(Notifier& notifier)
 {
-    ThreadData::the().notifiers.remove(&notifier);
+    auto thread_data_ptr = ThreadData::for_thread(notifier.owner_thread());
+    if (!thread_data_ptr)
+        return;
+
+    auto& thread_data = *thread_data_ptr;
+    auto it = thread_data.notifier_by_ptr.find(&notifier);
+    VERIFY(it != thread_data.notifier_by_ptr.end());
+
+    size_t notifier_index = it->value;
+    thread_data.notifier_by_ptr.remove(it);
+
+    if (notifier_index + 1 != thread_data.poll_fds.size()) {
+        swap(thread_data.poll_fds[notifier_index], thread_data.poll_fds.last());
+        swap(thread_data.notifier_by_index[notifier_index], thread_data.notifier_by_index.last());
+        thread_data.notifier_by_ptr.set(thread_data.notifier_by_index[notifier_index], notifier_index);
+    }
+    thread_data.poll_fds.take_last();
+    thread_data.notifier_by_index.take_last();
 }
 
 void EventLoopManagerUnix::did_post_event()

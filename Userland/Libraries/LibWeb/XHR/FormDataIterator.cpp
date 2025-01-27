@@ -8,6 +8,7 @@
 #include <LibJS/Runtime/Iterator.h>
 #include <LibWeb/Bindings/FormDataIteratorPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/FileAPI/File.h>
 #include <LibWeb/XHR/FormDataIterator.h>
 
 namespace Web::Bindings {
@@ -42,7 +43,7 @@ FormDataIterator::~FormDataIterator() = default;
 void FormDataIterator::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::FormDataIteratorPrototype>(realm, "FormDataIterator"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(FormDataIterator);
 }
 
 void FormDataIterator::visit_edges(Cell::Visitor& visitor)

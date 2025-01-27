@@ -19,17 +19,7 @@ class LineBoxFragment {
     friend class LineBox;
 
 public:
-    LineBoxFragment(Node const& layout_node, int start, int length, CSSPixelPoint offset, CSSPixelSize size, CSSPixels border_box_top, CSSPixels border_box_bottom, Vector<Gfx::DrawGlyphOrEmoji> glyph_run = {})
-        : m_layout_node(layout_node)
-        , m_start(start)
-        , m_length(length)
-        , m_offset(offset)
-        , m_size(size)
-        , m_border_box_top(border_box_top)
-        , m_border_box_bottom(border_box_bottom)
-        , m_glyph_run(move(glyph_run))
-    {
-    }
+    LineBoxFragment(Node const& layout_node, int start, int length, CSSPixelPoint offset, CSSPixelSize size, CSSPixels border_box_top, CSS::Direction, RefPtr<Gfx::GlyphRun>);
 
     Node const& layout_node() const { return m_layout_node; }
     int start() const { return m_start; }
@@ -60,18 +50,26 @@ public:
 
     bool is_atomic_inline() const;
 
-    Vector<Gfx::DrawGlyphOrEmoji> const& glyph_run() const { return m_glyph_run; }
+    RefPtr<Gfx::GlyphRun> glyph_run() const { return m_glyph_run; }
+    void append_glyph_run(RefPtr<Gfx::GlyphRun> const&, CSSPixels run_width);
 
 private:
+    CSS::Direction resolve_glyph_run_direction(Gfx::GlyphRun::TextType) const;
+    void append_glyph_run_ltr(RefPtr<Gfx::GlyphRun> const&, CSSPixels run_width);
+    void append_glyph_run_rtl(RefPtr<Gfx::GlyphRun> const&, CSSPixels run_width);
+
     JS::NonnullGCPtr<Node const> m_layout_node;
     int m_start { 0 };
     int m_length { 0 };
     CSSPixelPoint m_offset;
     CSSPixelSize m_size;
     CSSPixels m_border_box_top { 0 };
-    CSSPixels m_border_box_bottom { 0 };
     CSSPixels m_baseline { 0 };
-    Vector<Gfx::DrawGlyphOrEmoji> m_glyph_run;
+    CSS::Direction m_direction { CSS::Direction::Ltr };
+
+    RefPtr<Gfx::GlyphRun> m_glyph_run;
+    float m_insert_position { 0 };
+    CSS::Direction m_current_insert_direction { CSS::Direction::Ltr };
 };
 
 }

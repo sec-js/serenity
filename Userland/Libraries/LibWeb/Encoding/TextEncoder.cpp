@@ -6,6 +6,7 @@
 
 #include <LibJS/Runtime/TypedArray.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/TextEncoderPrototype.h>
 #include <LibWeb/Encoding/TextEncoder.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 
@@ -28,7 +29,7 @@ TextEncoder::~TextEncoder() = default;
 void TextEncoder::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::TextEncoderPrototype>(realm, "TextEncoder"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(TextEncoder);
 }
 
 // https://encoding.spec.whatwg.org/#dom-textencoder-encode
@@ -55,9 +56,9 @@ TextEncoderEncodeIntoResult TextEncoder::encode_into(String const& source, JS::H
     auto& data = destination->viewed_array_buffer()->buffer();
 
     // 1. Let read be 0.
-    unsigned long long read = 0;
+    WebIDL::UnsignedLongLong read = 0;
     // 2. Let written be 0.
-    unsigned long long written = 0;
+    WebIDL::UnsignedLongLong written = 0;
 
     // NOTE: The AK::String is always UTF-8, so most of these steps are no-ops.
     // 3. Let encoder be an instance of the UTF-8 encoder.

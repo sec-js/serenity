@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2021-2022, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2021-2022, Kenneth Myhra <kennethmyhra@serenityos.org>
- * Copyright (c) 2021-2023, Sam Atkins <atkinssj@serenityos.org>
+ * Copyright (c) 2021-2024, Sam Atkins <atkinssj@serenityos.org>
  * Copyright (c) 2022, Matthias Zimmerman <matthias291999@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -14,7 +14,7 @@
 #include <AK/StdLibExtras.h>
 #include <AK/String.h>
 #include <AK/Vector.h>
-#include <Kernel/API/BeepInstruction.h>
+#include <LibCore/Environment.h>
 #include <LibCore/SessionManagement.h>
 #include <LibCore/System.h>
 #include <limits.h>
@@ -28,10 +28,12 @@
 #include <unistd.h>
 
 #ifdef AK_OS_SERENITY
+#    include <Kernel/API/BeepInstruction.h>
 #    include <Kernel/API/Unveil.h>
 #    include <LibCore/Account.h>
 #    include <LibSystem/syscall.h>
 #    include <serenity.h>
+#    include <sys/prctl.h>
 #    include <sys/ptrace.h>
 #    include <sys/sysmacros.h>
 #endif
@@ -46,8 +48,7 @@ static int memfd_create(char const* name, unsigned int flags)
 }
 #endif
 
-#if defined(AK_OS_MACOS)
-#    include <crt_externs.h>
+#if defined(AK_OS_MACOS) || defined(AK_OS_IOS)
 #    include <mach-o/dyld.h>
 #    include <sys/mman.h>
 #else
@@ -140,7 +141,7 @@ static ErrorOr<Optional<struct group>> getgrent_impl(Span<char> buffer)
 namespace Core::System {
 
 #ifndef HOST_NAME_MAX
-#    ifdef AK_OS_MACOS
+#    if defined(AK_OS_MACOS) || defined(AK_OS_IOS)
 #        define HOST_NAME_MAX 255
 #    else
 #        define HOST_NAME_MAX 64
@@ -148,6 +149,22 @@ namespace Core::System {
 #endif
 
 #ifdef AK_OS_SERENITY
+
+ErrorOr<void> enter_jail_mode_until_exit()
+{
+    auto rc = prctl(PR_SET_JAILED_UNTIL_EXIT, 0, 0, 0);
+    if (rc != 0)
+        return Error::from_syscall("prctl"sv, -rc);
+    return {};
+}
+
+ErrorOr<void> enter_jail_mode_until_exec()
+{
+    auto rc = prctl(PR_SET_JAILED_UNTIL_EXEC, 0, 0, 0);
+    if (rc != 0)
+        return Error::from_syscall("prctl"sv, -rc);
+    return {};
+}
 
 ErrorOr<void> beep(u16 tone, u16 milliseconds_duration)
 {
@@ -261,12 +278,29 @@ ErrorOr<void> ptrace_peekbuf(pid_t tid, void const* tracee_addr, Bytes destinati
     HANDLE_SYSCALL_RETURN_VALUE("ptrace_peekbuf", rc, {});
 }
 
-ErrorOr<void> bindmount(int source_fd, StringView target, int flags)
+ErrorOr<void> copy_mount(Optional<i32> original_vfs_context_id, Optional<i32> target_vfs_context_id, StringView original_mountpoint, StringView target_mountpoint, int flags)
+{
+    if (target_mountpoint.is_null() || original_mountpoint.is_null())
+        return Error::from_errno(EFAULT);
+
+    Syscall::SC_copy_mount_params params {
+        original_vfs_context_id.value_or(-1),
+        target_vfs_context_id.value_or(-1),
+        { original_mountpoint.characters_without_null_termination(), original_mountpoint.length() },
+        { target_mountpoint.characters_without_null_termination(), target_mountpoint.length() },
+        flags,
+    };
+    int rc = syscall(SC_copy_mount, &params);
+    HANDLE_SYSCALL_RETURN_VALUE("copy_mount", rc, {});
+}
+
+ErrorOr<void> bindmount(Optional<i32> vfs_context_id, int source_fd, StringView target, int flags)
 {
     if (target.is_null())
         return Error::from_errno(EFAULT);
 
     Syscall::SC_bindmount_params params {
+        vfs_context_id.value_or(-1),
         { target.characters_without_null_termination(), target.length() },
         source_fd,
         flags,
@@ -275,12 +309,13 @@ ErrorOr<void> bindmount(int source_fd, StringView target, int flags)
     HANDLE_SYSCALL_RETURN_VALUE("bindmount", rc, {});
 }
 
-ErrorOr<void> remount(StringView target, int flags)
+ErrorOr<void> remount(Optional<i32> vfs_context_id, StringView target, int flags)
 {
     if (target.is_null())
         return Error::from_errno(EFAULT);
 
     Syscall::SC_remount_params params {
+        vfs_context_id.value_or(-1),
         { target.characters_without_null_termination(), target.length() },
         flags
     };
@@ -288,21 +323,21 @@ ErrorOr<void> remount(StringView target, int flags)
     HANDLE_SYSCALL_RETURN_VALUE("remount", rc, {});
 }
 
-ErrorOr<void> mount(int source_fd, StringView target, StringView fs_type, int flags)
+ErrorOr<void> mount(Optional<i32> vfs_context_id, int source_fd, StringView target, StringView fs_type, int flags)
 {
     if (target.is_null() || fs_type.is_null())
         return Error::from_errno(EFAULT);
 
     if (flags & MS_REMOUNT) {
-        TRY(remount(target, flags));
+        TRY(remount(vfs_context_id, target, flags));
         return {};
     }
     if (flags & MS_BIND) {
-        TRY(bindmount(source_fd, target, flags));
+        TRY(bindmount(vfs_context_id, source_fd, target, flags));
         return {};
     }
     int mount_fd = TRY(fsopen(fs_type, flags));
-    return fsmount(mount_fd, source_fd, target);
+    return fsmount(vfs_context_id, mount_fd, source_fd, target);
 }
 
 ErrorOr<int> fsopen(StringView fs_type, int flags)
@@ -318,12 +353,13 @@ ErrorOr<int> fsopen(StringView fs_type, int flags)
     HANDLE_SYSCALL_RETURN_VALUE("fsopen", rc, rc);
 }
 
-ErrorOr<void> fsmount(int mount_fd, int source_fd, StringView target)
+ErrorOr<void> fsmount(Optional<i32> vfs_context_id, int mount_fd, int source_fd, StringView target)
 {
     if (target.is_null())
         return Error::from_errno(EFAULT);
 
     Syscall::SC_fsmount_params params {
+        vfs_context_id.value_or(-1),
         mount_fd,
         { target.characters_without_null_termination(), target.length() },
         source_fd,
@@ -332,12 +368,16 @@ ErrorOr<void> fsmount(int mount_fd, int source_fd, StringView target)
     HANDLE_SYSCALL_RETURN_VALUE("fsmount", rc, {});
 }
 
-ErrorOr<void> umount(StringView mount_point)
+ErrorOr<void> umount(Optional<i32> vfs_context_id, StringView mount_point)
 {
     if (mount_point.is_null())
         return Error::from_errno(EFAULT);
 
-    int rc = syscall(SC_umount, mount_point.characters_without_null_termination(), mount_point.length());
+    Syscall::SC_umount_params params {
+        vfs_context_id.value_or(-1),
+        { mount_point.characters_without_null_termination(), mount_point.length() },
+    };
+    int rc = syscall(SC_umount, &params);
     HANDLE_SYSCALL_RETURN_VALUE("umount", rc, {});
 }
 
@@ -374,7 +414,7 @@ ErrorOr<void> profiling_free_buffer(pid_t pid)
 }
 #endif
 
-#if !defined(AK_OS_BSD_GENERIC) && !defined(AK_OS_ANDROID)
+#if !defined(AK_OS_BSD_GENERIC)
 ErrorOr<Optional<struct spwd>> getspent()
 {
     errno = 0;
@@ -399,7 +439,7 @@ ErrorOr<Optional<struct spwd>> getspnam(StringView name)
 }
 #endif
 
-#if !defined(AK_OS_MACOS) && !defined(AK_OS_HAIKU)
+#if !defined(AK_OS_MACOS) && !defined(AK_OS_IOS) && !defined(AK_OS_HAIKU)
 ErrorOr<int> accept4(int sockfd, sockaddr* address, socklen_t* address_length, int flags)
 {
     auto fd = ::accept4(sockfd, address, address_length, flags);
@@ -529,9 +569,9 @@ ErrorOr<int> anon_create([[maybe_unused]] size_t size, [[maybe_unused]] int opti
         return Error::from_errno(saved_errno);
     }
 #elif defined(AK_OS_BSD_GENERIC) || defined(AK_OS_EMSCRIPTEN) || defined(AK_OS_HAIKU)
-    struct timespec time;
-    clock_gettime(CLOCK_REALTIME, &time);
-    auto name = ByteString::formatted("/shm-{}{}", (unsigned long)time.tv_sec, (unsigned long)time.tv_nsec);
+    static size_t shared_memory_id = 0;
+
+    auto name = ByteString::formatted("/shm-{}-{}", getpid(), shared_memory_id++);
     fd = shm_open(name.characters(), O_RDWR | O_CREAT | options, 0600);
 
     if (shm_unlink(name.characters()) == -1) {
@@ -595,6 +635,13 @@ ErrorOr<void> ftruncate(int fd, off_t length)
 {
     if (::ftruncate(fd, length) < 0)
         return Error::from_syscall("ftruncate"sv, -errno);
+    return {};
+}
+
+ErrorOr<void> fsync(int fd)
+{
+    if (::fsync(fd) < 0)
+        return Error::from_syscall("fsync"sv, -errno);
     return {};
 }
 
@@ -898,17 +945,19 @@ ErrorOr<Optional<struct group>> getgrnam(StringView name)
         return Optional<struct group> {};
 }
 
+#if !defined(AK_OS_IOS)
 ErrorOr<void> clock_settime(clockid_t clock_id, struct timespec* ts)
 {
-#ifdef AK_OS_SERENITY
+#    ifdef AK_OS_SERENITY
     int rc = syscall(SC_clock_settime, clock_id, ts);
     HANDLE_SYSCALL_RETURN_VALUE("clocksettime", rc, {});
-#else
+#    else
     if (::clock_settime(clock_id, ts) < 0)
         return Error::from_syscall("clocksettime"sv, -errno);
     return {};
-#endif
+#    endif
 }
+#endif
 
 static ALWAYS_INLINE ErrorOr<pid_t> posix_spawn_wrapper(StringView path, posix_spawn_file_actions_t const* file_actions, posix_spawnattr_t const* attr, char* const arguments[], char* const envp[], StringView function_name, decltype(::posix_spawn) spawn_function)
 {
@@ -1255,7 +1304,7 @@ ErrorOr<struct utsname> uname()
     return uts;
 }
 
-#if !defined(AK_OS_ANDROID) && !defined(AK_OS_HAIKU)
+#if !defined(AK_OS_HAIKU)
 ErrorOr<void> adjtime(const struct timeval* delta, struct timeval* old_delta)
 {
 #    ifdef AK_OS_SERENITY
@@ -1270,39 +1319,39 @@ ErrorOr<void> adjtime(const struct timeval* delta, struct timeval* old_delta)
 #endif
 
 #ifdef AK_OS_SERENITY
+ErrorOr<u32> unshare_create(Kernel::UnshareType type, unsigned flags)
+{
+    Syscall::SC_unshare_create_params params {
+        static_cast<int>(type),
+        static_cast<int>(flags),
+    };
+    int rc = syscall(SC_unshare_create, &params);
+    HANDLE_SYSCALL_RETURN_VALUE("unshare_create", rc, rc);
+}
+
+ErrorOr<void> unshare_attach(Kernel::UnshareType type, unsigned index)
+{
+    Syscall::SC_unshare_attach_params params {
+        static_cast<int>(type),
+        static_cast<int>(index),
+    };
+    int rc = syscall(SC_unshare_attach, &params);
+    HANDLE_SYSCALL_RETURN_VALUE("unshare_attach", rc, {});
+}
+
 ErrorOr<void> exec_command(Vector<StringView>& command, bool preserve_env)
 {
     Vector<StringView> exec_environment;
-    for (size_t i = 0; environ[i]; ++i) {
-        StringView env_view { environ[i], strlen(environ[i]) };
-        auto maybe_needle = env_view.find('=');
-
-        if (!maybe_needle.has_value())
-            continue;
-
+    for (auto entry : Environment::entries()) {
         // FIXME: Allow a custom selection of variables once ArgsParser supports options with optional parameters.
-        if (!preserve_env && env_view.substring_view(0, maybe_needle.value()) != "TERM"sv)
+        if (!preserve_env && entry.name != "TERM"sv)
             continue;
 
-        exec_environment.append(env_view);
+        exec_environment.append(entry.full_entry);
     }
 
     TRY(Core::System::exec(command.at(0), command, Core::System::SearchInPath::Yes, exec_environment));
     return {};
-}
-
-ErrorOr<void> join_jail(u64 jail_index)
-{
-    Syscall::SC_jail_attach_params params { jail_index };
-    int rc = syscall(SC_jail_attach, &params);
-    HANDLE_SYSCALL_RETURN_VALUE("jail_attach", rc, {});
-}
-
-ErrorOr<u64> create_jail(StringView jail_name, JailIsolationFlags flags)
-{
-    Syscall::SC_jail_create_params params { 0, { jail_name.characters_without_null_termination(), jail_name.length() }, static_cast<int>(flags) };
-    int rc = syscall(SC_jail_create, &params);
-    HANDLE_SYSCALL_RETURN_VALUE("jail_create", rc, static_cast<u64>(params.index));
 }
 #endif
 
@@ -1322,8 +1371,7 @@ ErrorOr<void> exec(StringView filename, ReadonlySpan<StringView> arguments, Sear
     if (environment.has_value()) {
         env_count = environment->size();
     } else {
-        for (size_t i = 0; environ[i]; ++i)
-            ++env_count;
+        env_count = Core::Environment::size();
     }
 
     auto environment_strings = TRY(FixedArray<Syscall::StringArgument>::create(env_count));
@@ -1332,8 +1380,9 @@ ErrorOr<void> exec(StringView filename, ReadonlySpan<StringView> arguments, Sear
             environment_strings[i] = { environment->at(i).characters_without_null_termination(), environment->at(i).length() };
         }
     } else {
-        for (size_t i = 0; i < env_count; ++i) {
-            environment_strings[i] = { environ[i], strlen(environ[i]) };
+        size_t i = 0;
+        for (auto entry : Core::Environment::entries()) {
+            environment_strings[i++] = { entry.full_entry.characters_without_null_termination(), entry.full_entry.length() };
         }
     }
     params.environment.strings = environment_strings.data();
@@ -1385,7 +1434,7 @@ ErrorOr<void> exec(StringView filename, ReadonlySpan<StringView> arguments, Sear
         envp[environment->size()] = nullptr;
 
         if (search_in_path == SearchInPath::Yes && !filename.contains('/')) {
-#    if defined(AK_OS_MACOS) || defined(AK_OS_FREEBSD) || defined(AK_OS_SOLARIS)
+#    if defined(AK_OS_MACOS) || defined(AK_OS_IOS) || defined(AK_OS_FREEBSD) || defined(AK_OS_SOLARIS)
             // These BSDs don't support execvpe(), so we'll have to manually search the PATH.
             ScopedValueRollback errno_rollback(errno);
 
@@ -1567,16 +1616,35 @@ ErrorOr<void> socketpair(int domain, int type, int protocol, int sv[2])
     return {};
 }
 
-ErrorOr<Array<int, 2>> pipe2([[maybe_unused]] int flags)
+ErrorOr<Array<int, 2>> pipe2(int flags)
 {
     Array<int, 2> fds;
+
 #if defined(__unix__)
     if (::pipe2(fds.data(), flags) < 0)
         return Error::from_syscall("pipe2"sv, -errno);
 #else
     if (::pipe(fds.data()) < 0)
         return Error::from_syscall("pipe2"sv, -errno);
+
+    // Ensure we don't leak the fds if any of the system calls below fail.
+    AK::ArmedScopeGuard close_fds { [&]() {
+        MUST(close(fds[0]));
+        MUST(close(fds[1]));
+    } };
+
+    if ((flags & O_CLOEXEC) != 0) {
+        TRY(fcntl(fds[0], F_SETFD, FD_CLOEXEC));
+        TRY(fcntl(fds[1], F_SETFD, FD_CLOEXEC));
+    }
+    if ((flags & O_NONBLOCK) != 0) {
+        TRY(fcntl(fds[0], F_SETFL, TRY(fcntl(fds[0], F_GETFL)) | O_NONBLOCK));
+        TRY(fcntl(fds[1], F_SETFL, TRY(fcntl(fds[1], F_GETFL)) | O_NONBLOCK));
+    }
+
+    close_fds.disarm();
 #endif
+
     return fds;
 }
 
@@ -1607,7 +1675,7 @@ ErrorOr<void> mknod(StringView pathname, mode_t mode, dev_t dev)
         return Error::from_syscall("mknod"sv, -EFAULT);
 
 #ifdef AK_OS_SERENITY
-    Syscall::SC_mknod_params params { { pathname.characters_without_null_termination(), pathname.length() }, mode, dev };
+    Syscall::SC_mknod_params params { { pathname.characters_without_null_termination(), pathname.length() }, mode, dev, AT_FDCWD };
     int rc = syscall(SC_mknod, &params);
     HANDLE_SYSCALL_RETURN_VALUE("mknod", rc, {});
 #else
@@ -1621,49 +1689,6 @@ ErrorOr<void> mknod(StringView pathname, mode_t mode, dev_t dev)
 ErrorOr<void> mkfifo(StringView pathname, mode_t mode)
 {
     return mknod(pathname, mode | S_IFIFO, 0);
-}
-
-ErrorOr<void> setenv(StringView name, StringView value, bool overwrite)
-{
-    auto builder = TRY(StringBuilder::create());
-    TRY(builder.try_append(name));
-    TRY(builder.try_append('\0'));
-    TRY(builder.try_append(value));
-    TRY(builder.try_append('\0'));
-    // Note the explicit null terminators above.
-    auto c_name = builder.string_view().characters_without_null_termination();
-    auto c_value = c_name + name.length() + 1;
-    auto rc = ::setenv(c_name, c_value, overwrite);
-    if (rc < 0)
-        return Error::from_errno(errno);
-    return {};
-}
-
-ErrorOr<void> unsetenv(StringView name)
-{
-    auto builder = TRY(StringBuilder::create());
-    TRY(builder.try_append(name));
-    TRY(builder.try_append('\0'));
-
-    // Note the explicit null terminator above.
-    auto rc = ::unsetenv(builder.string_view().characters_without_null_termination());
-    if (rc < 0)
-        return Error::from_errno(errno);
-    return {};
-}
-
-ErrorOr<void> putenv(StringView env)
-{
-#ifdef AK_OS_SERENITY
-    auto rc = serenity_putenv(env.characters_without_null_termination(), env.length());
-#else
-    // Leak somewhat unavoidable here due to the putenv API.
-    auto leaked_new_env = strndup(env.characters_without_null_termination(), env.length());
-    auto rc = ::putenv(leaked_new_env);
-#endif
-    if (rc < 0)
-        return Error::from_errno(errno);
-    return {};
 }
 
 ErrorOr<int> posix_openpt(int flags)
@@ -1767,6 +1792,16 @@ ErrorOr<void> posix_fallocate(int fd, off_t offset, off_t length)
 // the distinction between these libraries moot.
 static constexpr StringView INTERNAL_DEFAULT_PATH_SV = "/usr/local/sbin:/usr/local/bin:/usr/bin:/bin"sv;
 
+unsigned hardware_concurrency()
+{
+    return sysconf(_SC_NPROCESSORS_ONLN);
+}
+
+u64 physical_memory_bytes()
+{
+    return sysconf(_SC_PHYS_PAGES) * PAGE_SIZE;
+}
+
 ErrorOr<String> resolve_executable_from_environment(StringView filename, int flags)
 {
     if (filename.is_empty())
@@ -1797,19 +1832,10 @@ ErrorOr<String> resolve_executable_from_environment(StringView filename, int fla
     return Error::from_errno(ENOENT);
 }
 
-char** environment()
-{
-#if defined(AK_OS_MACOS)
-    return *_NSGetEnviron();
-#else
-    return environ;
-#endif
-}
-
 ErrorOr<ByteString> current_executable_path()
 {
     char path[4096] = {};
-#if defined(AK_OS_LINUX) || defined(AK_OS_ANDROID) || defined(AK_OS_SERENITY)
+#if defined(AK_OS_LINUX) || defined(AK_OS_SERENITY)
     auto ret = ::readlink("/proc/self/exe", path, sizeof(path) - 1);
     // Ignore error if it wasn't a symlink
     if (ret == -1 && errno != EINVAL)
@@ -1840,7 +1866,7 @@ ErrorOr<ByteString> current_executable_path()
     size_t len = sizeof(path);
     if (sysctl(mib, 4, path, &len, nullptr, 0) < 0)
         return Error::from_syscall("sysctl"sv, -errno);
-#elif defined(AK_OS_MACOS)
+#elif defined(AK_OS_MACOS) || defined(AK_OS_IOS)
     u32 size = sizeof(path);
     auto ret = _NSGetExecutablePath(path, &size);
     if (ret != 0)
@@ -1850,16 +1876,16 @@ ErrorOr<ByteString> current_executable_path()
     for (int32 cookie { 0 }; get_next_image_info(B_CURRENT_TEAM, &cookie, &info) == B_OK && info.type != B_APP_IMAGE;)
         ;
     if (info.type != B_APP_IMAGE)
-        return Error::from_string_view("current_executable_path() failed"sv);
+        return Error::from_string_literal("current_executable_path() failed");
     if (sizeof(info.name) > sizeof(path))
         return Error::from_errno(ENAMETOOLONG);
     strlcpy(path, info.name, sizeof(path) - 1);
 #elif defined(AK_OS_EMSCRIPTEN)
-    return Error::from_string_view("current_executable_path() unknown on this platform"sv);
+    return Error::from_string_literal("current_executable_path() unknown on this platform");
 #else
 #    warning "Not sure how to get current_executable_path on this platform!"
     // GetModuleFileName on Windows, unsure about OpenBSD.
-    return Error::from_string_view("current_executable_path unknown"sv);
+    return Error::from_string_literal("current_executable_path unknown");
 #endif
     path[sizeof(path) - 1] = '\0';
     return ByteString { path, strlen(path) };
@@ -1871,6 +1897,27 @@ ErrorOr<Bytes> allocate(size_t count, size_t size)
     if (!data)
         return Error::from_errno(errno);
     return Bytes { data, size * count };
+}
+
+ErrorOr<rlimit> get_resource_limits(int resource)
+{
+    rlimit limits;
+
+    if (::getrlimit(resource, &limits) != 0)
+        return Error::from_syscall("getrlimit"sv, -errno);
+
+    return limits;
+}
+
+ErrorOr<void> set_resource_limits(int resource, rlim_t limit)
+{
+    auto limits = TRY(get_resource_limits(resource));
+    limits.rlim_cur = min(limit, limits.rlim_max);
+
+    if (::setrlimit(resource, &limits) != 0)
+        return Error::from_syscall("setrlimit"sv, -errno);
+
+    return {};
 }
 
 }

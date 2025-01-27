@@ -13,7 +13,9 @@
 #include <AK/Vector.h>
 
 void platform_init();
-ErrorOr<String> application_directory();
-ErrorOr<Vector<String>> get_paths_for_helper_process(StringView process_name);
+ErrorOr<ByteString> application_directory();
+ErrorOr<Vector<ByteString>> get_paths_for_helper_process(StringView process_name);
 
 extern ByteString s_serenity_resource_root;
+Optional<ByteString const&> mach_server_name();
+void set_mach_server_name(ByteString name);

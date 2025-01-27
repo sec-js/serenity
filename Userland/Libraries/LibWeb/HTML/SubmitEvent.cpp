@@ -5,6 +5,7 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/SubmitEventPrototype.h>
 #include <LibWeb/HTML/SubmitEvent.h>
 
 namespace Web::HTML {
@@ -32,7 +33,7 @@ SubmitEvent::~SubmitEvent() = default;
 void SubmitEvent::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::SubmitEventPrototype>(realm, "SubmitEvent"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(SubmitEvent);
 }
 
 void SubmitEvent::visit_edges(Cell::Visitor& visitor)

@@ -1,6 +1,6 @@
 #!/usr/bin/env -S bash ../.port_include.sh
 port='openrct2'
-version='0.4.5'
+version='0.4.9'
 depends=(
     'curl'
     'flac'
@@ -18,12 +18,12 @@ depends=(
     'zlib'
 )
 files=(
-    "https://github.com/OpenRCT2/OpenRCT2/archive/refs/tags/v${version}.tar.gz#eb9e20dc0dcbf10b02b5f334a029983a0a2b43d931f95a2088a64e8b2657bab1"
-    "https://github.com/OpenRCT2/OpenRCT2/releases/download/v${version}/OpenRCT2-${version}-linux-jammy-x86_64.tar.gz#c0652ace6fd2302e77cd25b85bb973e3c0d2c8be1d20cfdcb7a2a9b15630d112"
+    "https://github.com/OpenRCT2/OpenRCT2/archive/refs/tags/v${version}.tar.gz#d9eb7bb99923152122716707888a6182491662e106bef91b86106fa7b45b4309"
+    "https://github.com/OpenRCT2/OpenRCT2/releases/download/v${version}/OpenRCT2-${version}-linux-jammy-x86_64.tar.gz#f388d46956f32755a504df1582fea7b800a8c100333667cb3f9c495c5c9d7201"
 )
 useconfigure='true'
 workdir="OpenRCT2-${version}"
-icon_file='resources/logo/icon_x16.png'
+icon_file='resources/logo/icon.ico'
 launcher_name='OpenRCT2'
 launcher_category='&Games'
 launcher_command='/usr/local/bin/openrct2'

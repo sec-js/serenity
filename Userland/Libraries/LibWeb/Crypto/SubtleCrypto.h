@@ -13,7 +13,7 @@
 #include <LibJS/Forward.h>
 #include <LibWeb/Bindings/PlatformObject.h>
 #include <LibWeb/Bindings/SubtleCryptoPrototype.h>
-#include <LibWeb/Crypto/CryptoBindings.h>
+#include <LibWeb/Crypto/CryptoAlgorithms.h>
 #include <LibWeb/Crypto/CryptoKey.h>
 
 namespace Web::Crypto {
@@ -22,29 +22,34 @@ class SubtleCrypto final : public Bindings::PlatformObject {
     WEB_PLATFORM_OBJECT(SubtleCrypto, Bindings::PlatformObject);
     JS_DECLARE_ALLOCATOR(SubtleCrypto);
 
-    using SupportedAlgorithmsMap = HashMap<String, HashMap<String, String, AK::ASCIICaseInsensitiveStringTraits>>;
-    using KeyDataType = Variant<JS::Handle<WebIDL::BufferSource>, Bindings::JsonWebKey>;
-    using AlgorithmIdentifier = Variant<JS::Handle<JS::Object>, String>;
-
 public:
     [[nodiscard]] static JS::NonnullGCPtr<SubtleCrypto> create(JS::Realm&);
 
     virtual ~SubtleCrypto() override;
 
+    JS::NonnullGCPtr<JS::Promise> encrypt(AlgorithmIdentifier const& algorithm, JS::NonnullGCPtr<CryptoKey> key, JS::Handle<WebIDL::BufferSource> const& data_parameter);
+    JS::NonnullGCPtr<JS::Promise> decrypt(AlgorithmIdentifier const& algorithm, JS::NonnullGCPtr<CryptoKey> key, JS::Handle<WebIDL::BufferSource> const& data_parameter);
+    JS::ThrowCompletionOr<JS::NonnullGCPtr<JS::Promise>> sign(AlgorithmIdentifier const& algorithm, JS::NonnullGCPtr<CryptoKey> key, JS::Handle<WebIDL::BufferSource> const& data_parameter);
+    JS::ThrowCompletionOr<JS::NonnullGCPtr<JS::Promise>> verify(AlgorithmIdentifier const& algorithm, JS::NonnullGCPtr<CryptoKey> key, JS::Handle<WebIDL::BufferSource> const& signature, JS::Handle<WebIDL::BufferSource> const& data_parameter);
+
     JS::NonnullGCPtr<JS::Promise> digest(AlgorithmIdentifier const& algorithm, JS::Handle<WebIDL::BufferSource> const& data);
-    JS::ThrowCompletionOr<JS::NonnullGCPtr<JS::Promise>> import_key(Bindings::KeyFormat format, KeyDataType keyData, AlgorithmIdentifier algorithm, bool extractable, Vector<Bindings::KeyUsage> keyUsages);
+
+    JS::ThrowCompletionOr<JS::NonnullGCPtr<JS::Promise>> generate_key(AlgorithmIdentifier algorithm, bool extractable, Vector<Bindings::KeyUsage> key_usages);
+    JS::ThrowCompletionOr<JS::NonnullGCPtr<JS::Promise>> derive_bits(AlgorithmIdentifier algorithm, JS::NonnullGCPtr<CryptoKey> base_key, u32 length);
+    JS::ThrowCompletionOr<JS::NonnullGCPtr<JS::Promise>> derive_key(AlgorithmIdentifier algorithm, JS::NonnullGCPtr<CryptoKey> base_key, AlgorithmIdentifier derived_key_type, bool extractable, Vector<Bindings::KeyUsage> key_usages);
+
+    JS::ThrowCompletionOr<JS::NonnullGCPtr<JS::Promise>> import_key(Bindings::KeyFormat format, KeyDataType key_data, AlgorithmIdentifier algorithm, bool extractable, Vector<Bindings::KeyUsage> key_usages);
+    JS::ThrowCompletionOr<JS::NonnullGCPtr<JS::Promise>> export_key(Bindings::KeyFormat format, JS::NonnullGCPtr<CryptoKey> key);
 
 private:
     explicit SubtleCrypto(JS::Realm&);
     virtual void initialize(JS::Realm&) override;
-
-    JS::ThrowCompletionOr<Bindings::Algorithm> normalize_an_algorithm(AlgorithmIdentifier const& algorithm, String operation);
-
-    WebIDL::ExceptionOr<JS::NonnullGCPtr<CryptoKey>> pbkdf2_import_key(Variant<ByteBuffer, Bindings::JsonWebKey, Empty> key_data, AlgorithmIdentifier algorithm, Bindings::KeyFormat format, bool extractable, Vector<Bindings::KeyUsage> usages);
-
-    static SubtleCrypto::SupportedAlgorithmsMap& supported_algorithms_internal();
-    static SubtleCrypto::SupportedAlgorithmsMap supported_algorithms();
-    static void define_an_algorithm(String op, String algorithm, String type);
 };
+
+struct NormalizedAlgorithmAndParameter {
+    NonnullOwnPtr<AlgorithmMethods> methods;
+    NonnullOwnPtr<AlgorithmParams> parameter;
+};
+WebIDL::ExceptionOr<NormalizedAlgorithmAndParameter> normalize_an_algorithm(JS::Realm&, AlgorithmIdentifier const& algorithm, String operation);
 
 }

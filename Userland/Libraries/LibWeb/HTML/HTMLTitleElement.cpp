@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLTitleElementPrototype.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/HTMLTitleElement.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
@@ -23,14 +24,15 @@ HTMLTitleElement::~HTMLTitleElement() = default;
 void HTMLTitleElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLTitleElementPrototype>(realm, "HTMLTitleElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLTitleElement);
 }
 
 void HTMLTitleElement::children_changed()
 {
     HTMLElement::children_changed();
-    if (navigable() && navigable()->is_traversable()) {
-        navigable()->traversable_navigable()->page().client().page_did_change_title(document().title().to_byte_string());
+    auto navigable = this->navigable();
+    if (navigable && navigable->is_traversable()) {
+        navigable->traversable_navigable()->page().client().page_did_change_title(document().title().to_byte_string());
     }
 }
 

@@ -45,6 +45,8 @@ class TreeList;
 class RecordDirectListInitialization;
 class FunctionCall;
 class SlotName;
+class Enumerator;
+using EnumeratorRef = NonnullRefPtr<Enumerator>;
 class Variable;
 using VariableRef = NonnullRefPtr<Variable>;
 class FunctionPointer;
@@ -59,12 +61,20 @@ class ControlFlowGraph;
 class RecursiveASTVisitor;
 
 // Parser/SpecParser.h
+class SpecificationParsingContext;
 class AlgorithmStep;
 class AlgorithmStepList;
 class Algorithm;
-class SpecFunction;
+class SpecificationFunction;
 class SpecificationClause;
 class Specification;
+
+namespace Runtime {
+class Cell;
+class Object;
+class ObjectType;
+class Realm;
+}
 
 // DiagnosticEngine.h
 struct LogicalLocation;

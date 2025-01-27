@@ -8,8 +8,10 @@ set(SOURCES
     PDFViewer.cpp
     PDFViewerWidget.cpp
     SidebarWidget.cpp
+    ThumbnailsListView.cpp
+    ThumbnailsModel.cpp
     main.cpp
     )
 
 serenity_app(PDFViewer ICON app-pdf-viewer)
-target_link_libraries(PDFViewer PRIVATE LibCore LibGfx LibGUI LibPDF LibFileSystemAccessClient LibConfig LibMain)
+target_link_libraries(PDFViewer PRIVATE LibCore LibGfx LibGUI LibPDF LibFileSystemAccessClient LibConfig LibMain LibURL)

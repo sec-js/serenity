@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Assertions.h>
 #include <AK/Types.h>
 #include <fenv.h>
 
@@ -68,8 +69,11 @@ int fegetround()
 
 int fesetround(int rounding_mode)
 {
-    if (rounding_mode < FE_TONEAREST || rounding_mode > FE_TOWARDZERO)
+    if (rounding_mode < FE_TONEAREST || rounding_mode > FE_TOMAXMAGNITUDE)
         return 1;
+
+    if (rounding_mode == FE_TOMAXMAGNITUDE)
+        rounding_mode = FE_TONEAREST;
 
     TODO_AARCH64();
     return 0;

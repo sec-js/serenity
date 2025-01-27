@@ -8,6 +8,7 @@
 
 #include <AK/DefaultDelete.h>
 #include <AK/SinglyLinkedListSizePolicy.h>
+#include <AK/StdLibExtras.h>
 #include <AK/Types.h>
 
 namespace AK {
@@ -19,12 +20,17 @@ class ByteBuffer;
 
 enum class TrailingCodePointTransformation : u8;
 
+class AsyncInputStream;
+class AsyncOutputStream;
+class AsyncStream;
 class BigEndianInputBitStream;
 class BigEndianOutputBitStream;
 class Bitmap;
 using ByteBuffer = Detail::ByteBuffer<32>;
 class CircularBuffer;
 class ConstrainedStream;
+template<typename T>
+class Coroutine;
 class CountingStream;
 class DeprecatedFlyString;
 class ByteString;
@@ -32,6 +38,7 @@ class DeprecatedStringCodePointIterator;
 class Duration;
 class Error;
 class FlyString;
+class GenericAwaiter;
 class GenericLexer;
 class IPv4Address;
 class JsonArray;
@@ -48,7 +55,6 @@ class String;
 class StringBuilder;
 class StringImpl;
 class StringView;
-class URL;
 class UnixDateTime;
 class Utf16View;
 class Utf32CodePointIterator;
@@ -152,6 +158,9 @@ class [[nodiscard]] ErrorOr;
 
 #if USING_AK_GLOBALLY
 using AK::Array;
+using AK::AsyncInputStream;
+using AK::AsyncOutputStream;
+using AK::AsyncStream;
 using AK::Atomic;
 using AK::Badge;
 using AK::BigEndianInputBitStream;
@@ -163,6 +172,7 @@ using AK::ByteString;
 using AK::CircularBuffer;
 using AK::CircularQueue;
 using AK::ConstrainedStream;
+using AK::Coroutine;
 using AK::CountingStream;
 using AK::DeprecatedFlyString;
 using AK::DeprecatedStringCodePointIterator;
@@ -203,7 +213,6 @@ using AK::StringView;
 using AK::TrailingCodePointTransformation;
 using AK::Traits;
 using AK::UnixDateTime;
-using AK::URL;
 using AK::Utf16View;
 using AK::Utf32CodePointIterator;
 using AK::Utf32View;

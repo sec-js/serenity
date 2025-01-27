@@ -13,6 +13,8 @@
 #include <LibGUI/ItemListModel.h>
 #include <LibGUI/Window.h>
 
+namespace Run {
+
 class RunWindow final : public GUI::Window {
     C_OBJECT(RunWindow)
 public:
@@ -30,6 +32,7 @@ private:
     ByteString history_file_path();
     ErrorOr<void> load_history();
     ErrorOr<void> save_history();
+    void prepend_history(ByteString const& input);
 
     Vector<ByteString> m_path_history;
     NonnullRefPtr<GUI::ItemListModel<ByteString>> m_path_history_model;
@@ -40,3 +43,5 @@ private:
     RefPtr<GUI::Button> m_browse_button;
     RefPtr<GUI::ComboBox> m_path_combo_box;
 };
+
+}

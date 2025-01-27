@@ -13,6 +13,7 @@
 #include <AK/Vector.h>
 #include <Kernel/Bus/PCI/Controller/HostController.h>
 #include <Kernel/Bus/PCI/Definitions.h>
+#include <Kernel/Bus/PCI/Initializer.h>
 #include <Kernel/Locking/Spinlock.h>
 
 namespace Kernel::PCI {
@@ -26,6 +27,7 @@ public:
 #endif
 
     ErrorOr<void> fast_enumerate(Function<void(DeviceIdentifier const&)>&) const;
+    void configure_pci_space(PCIConfiguration&);
     void rescan_hardware();
 
     static Access& the();
@@ -50,6 +52,8 @@ public:
     ErrorOr<void> add_host_controller_and_scan_for_devices(NonnullOwnPtr<HostController>);
 
 private:
+    friend void PCI::initialize();
+
     u8 read8_field(DeviceIdentifier const&, RegisterOffset field);
     u16 read16_field(DeviceIdentifier const&, RegisterOffset field);
 

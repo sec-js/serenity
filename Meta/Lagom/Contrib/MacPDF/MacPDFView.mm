@@ -24,9 +24,9 @@ static PDF::PDFErrorOr<NonnullRefPtr<Gfx::Bitmap>> render(PDF::Document& documen
 {
     auto page = TRY(document.get_page(page_index));
 
-    Gfx::IntSize page_size;
-    page_size.set_width(size.width);
-    page_size.set_height(size.height);
+    auto page_size = Gfx::IntSize { size.width, size.height };
+    if (int rotation_count = (page.rotate / 90) % 4; rotation_count % 2 == 1)
+        page_size = Gfx::IntSize { page_size.height(), page_size.width() };
 
     auto bitmap = TRY(Gfx::Bitmap::create(Gfx::BitmapFormat::BGRx8888, page_size));
 
@@ -36,7 +36,7 @@ static PDF::PDFErrorOr<NonnullRefPtr<Gfx::Bitmap>> render(PDF::Document& documen
             NSLog(@"warning: %@", @(error.message().characters()));
     }
 
-    return bitmap;
+    return TRY(PDF::Renderer::apply_page_rotation(bitmap, page));
 }
 
 static NSBitmapImageRep* ns_from_gfx(NonnullRefPtr<Gfx::Bitmap> bitmap_p)
@@ -181,6 +181,14 @@ static NSBitmapImageRep* ns_from_gfx(NonnullRefPtr<Gfx::Bitmap> bitmap_p)
         [item setState:_preferences.clip_text ? NSControlStateValueOn : NSControlStateValueOff];
         return _doc ? YES : NO;
     }
+    if ([item action] == @selector(toggleShowImages:)) {
+        [item setState:_preferences.show_images ? NSControlStateValueOn : NSControlStateValueOff];
+        return _doc ? YES : NO;
+    }
+    if ([item action] == @selector(toggleShowHiddenText:)) {
+        [item setState:_preferences.show_hidden_text ? NSControlStateValueOn : NSControlStateValueOff];
+        return _doc ? YES : NO;
+    }
     return NO;
 }
 
@@ -212,6 +220,22 @@ static NSBitmapImageRep* ns_from_gfx(NonnullRefPtr<Gfx::Bitmap> bitmap_p)
 {
     if (_doc) {
         _preferences.clip_text = !_preferences.clip_text;
+        [self invalidateCachedBitmap];
+    }
+}
+
+- (IBAction)toggleShowImages:(id)sender
+{
+    if (_doc) {
+        _preferences.show_images = !_preferences.show_images;
+        [self invalidateCachedBitmap];
+    }
+}
+
+- (IBAction)toggleShowHiddenText:(id)sender
+{
+    if (_doc) {
+        _preferences.show_hidden_text = !_preferences.show_hidden_text;
         [self invalidateCachedBitmap];
     }
 }

@@ -26,14 +26,13 @@ PerformanceObserverEntryList::~PerformanceObserverEntryList() = default;
 void PerformanceObserverEntryList::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::PerformanceObserverEntryListPrototype>(realm, "PerformanceObserverEntryList"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(PerformanceObserverEntryList);
 }
 
 void PerformanceObserverEntryList::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    for (auto& entry : m_entry_list)
-        visitor.visit(entry);
+    visitor.visit(m_entry_list);
 }
 
 // https://www.w3.org/TR/performance-timeline/#dfn-filter-buffer-by-name-and-type

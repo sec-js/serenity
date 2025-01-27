@@ -2,13 +2,13 @@
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
-set(package ladybird)
+set(package Ladybird)
 
-set(ladybird_applications ladybird SQLServer WebContent WebDriver WebSocketServer RequestServer ImageDecoder WebWorker headless-browser)
+set(ladybird_applications ladybird ${ladybird_helper_processes})
 
 set(app_install_targets ${ladybird_applications})
 
-install(TARGETS ${app_install_targets}
+install(TARGETS ladybird
   EXPORT ladybirdTargets
   RUNTIME
     COMPONENT ladybird_Runtime
@@ -24,6 +24,13 @@ install(TARGETS ${app_install_targets}
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   FILE_SET ladybird
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+install(TARGETS ${ladybird_helper_processes}
+  EXPORT ladybirdTargets
+  RUNTIME
+    COMPONENT ladybird_Runtime
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}
 )
 
 include("${SERENITY_SOURCE_DIR}/Meta/Lagom/get_linked_lagom_libraries.cmake")
@@ -94,42 +101,21 @@ install(
     COMPONENT ladybird_Development
 )
 
-install(DIRECTORY
-    "${SERENITY_SOURCE_DIR}/Base/res/fonts"
-    "${SERENITY_SOURCE_DIR}/Base/res/icons"
-    "${SERENITY_SOURCE_DIR}/Base/res/ladybird"
-    "${SERENITY_SOURCE_DIR}/Base/res/themes"
-    "${SERENITY_SOURCE_DIR}/Base/res/color-palettes"
-    "${SERENITY_SOURCE_DIR}/Base/res/cursor-themes"
-  DESTINATION "${CMAKE_INSTALL_DATADIR}/res"
-  USE_SOURCE_PERMISSIONS MESSAGE_NEVER
-  COMPONENT ladybird_Runtime
-)
-
-install(FILES
-    "${SERENITY_SOURCE_DIR}/Base/home/anon/.config/BrowserAutoplayAllowlist.txt"
-    "${SERENITY_SOURCE_DIR}/Base/home/anon/.config/BrowserContentFilters.txt"
-    "${Lagom_BINARY_DIR}/cacert.pem"
-  DESTINATION "${CMAKE_INSTALL_DATADIR}/res/ladybird"
-  COMPONENT ladybird_Runtime
-)
+if (NOT APPLE)
+    # On macOS the resources are handled via the MACOSX_PACKAGE_LOCATION property on each resource file
+    install_ladybird_resources("${CMAKE_INSTALL_DATADIR}/Lagom" ladybird_Runtime)
+endif()
 
 if (APPLE)
   # Fixup the app bundle and copy:
   #   - Libraries from lib/ to Ladybird.app/Contents/lib
-  #   - Resources from share/res/ to Ladybird.app/Contents/Resources/res
   install(CODE "
-    set(res_dir \${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/res)
-    if (IS_ABSOLUTE ${CMAKE_INSTALL_DATADIR})
-      set(res_dir ${CMAKE_INSTALL_DATADIR}/res)
-    endif()
     set(lib_dir \${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR})
     if (IS_ABSOLUTE ${CMAKE_INSTALL_LIBDIR})
       set(lib_dir ${CMAKE_INSTALL_LIBDIR})
     endif()
 
     set(contents_dir \${CMAKE_INSTALL_PREFIX}/bundle/Ladybird.app/Contents)
-    file(COPY \${res_dir} DESTINATION \${contents_dir}/Resources)
     file(COPY \${lib_dir} DESTINATION \${contents_dir})
   "
   COMPONENT ladybird_Runtime)

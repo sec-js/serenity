@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/DocumentFragmentPrototype.h>
 #include <LibWeb/DOM/DocumentFragment.h>
 #include <LibWeb/HTML/Window.h>
 
@@ -19,7 +20,7 @@ DocumentFragment::DocumentFragment(Document& document)
 void DocumentFragment::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::DocumentFragmentPrototype>(realm, "DocumentFragment"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(DocumentFragment);
 }
 
 void DocumentFragment::visit_edges(Cell::Visitor& visitor)

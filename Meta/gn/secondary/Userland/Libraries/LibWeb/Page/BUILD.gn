@@ -5,8 +5,10 @@ source_set("Page") {
     "//Userland/",  # For LibGUI needing WindowServer types
   ]
   sources = [
+    "DragAndDropEventHandler.cpp",
     "EditEventHandler.cpp",
     "EventHandler.cpp",
+    "InputEvent.cpp",
     "Page.cpp",
   ]
 }

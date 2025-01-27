@@ -19,7 +19,14 @@ ParsingContext::ParsingContext(JS::Realm& realm, Mode mode)
 {
 }
 
-ParsingContext::ParsingContext(DOM::Document const& document, AK::URL url, Mode mode)
+ParsingContext::ParsingContext(JS::Realm& realm, URL::URL url, Mode mode)
+    : m_realm(realm)
+    , m_url(move(url))
+    , m_mode(mode)
+{
+}
+
+ParsingContext::ParsingContext(DOM::Document const& document, URL::URL url, Mode mode)
     : m_realm(const_cast<JS::Realm&>(document.realm()))
     , m_document(&document)
     , m_url(move(url))
@@ -49,14 +56,16 @@ bool ParsingContext::in_quirks_mode() const
 }
 
 // https://www.w3.org/TR/css-values-4/#relative-urls
-AK::URL ParsingContext::complete_url(StringView relative_url) const
+URL::URL ParsingContext::complete_url(StringView relative_url) const
 {
     return m_url.complete_url(relative_url);
 }
 
 HTML::Window const* ParsingContext::window() const
 {
-    return m_document && m_document->default_view() ? &m_document->window() : nullptr;
+    if (!m_document)
+        return nullptr;
+    return m_document->window();
 }
 
 }

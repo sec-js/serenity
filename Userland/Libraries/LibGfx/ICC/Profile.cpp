@@ -21,45 +21,16 @@ namespace Gfx::ICC {
 
 namespace {
 
-ErrorOr<time_t> parse_date_time_number(DateTimeNumber const& date_time)
+ErrorOr<DateTime> parse_date_time_number(DateTimeNumber const& date_time)
 {
-    // ICC V4, 4.2 dateTimeNumber
-
-    // "Number of the month (1 to 12)"
-    if (date_time.month < 1 || date_time.month > 12)
-        return Error::from_string_literal("ICC::Profile: dateTimeNumber month out of bounds");
-
-    // "Number of the day of the month (1 to 31)"
-    if (date_time.day < 1 || date_time.day > 31)
-        return Error::from_string_literal("ICC::Profile: dateTimeNumber day out of bounds");
-
-    // "Number of hours (0 to 23)"
-    if (date_time.hours > 23)
-        return Error::from_string_literal("ICC::Profile: dateTimeNumber hours out of bounds");
-
-    // "Number of minutes (0 to 59)"
-    if (date_time.minutes > 59)
-        return Error::from_string_literal("ICC::Profile: dateTimeNumber minutes out of bounds");
-
-    // "Number of seconds (0 to 59)"
-    // ICC profiles apparently can't be created during leap seconds (seconds would be 60 there, but the spec doesn't allow that).
-    if (date_time.seconds > 59)
-        return Error::from_string_literal("ICC::Profile: dateTimeNumber seconds out of bounds");
-
-    struct tm tm = {};
-    tm.tm_year = date_time.year - 1900;
-    tm.tm_mon = date_time.month - 1;
-    tm.tm_mday = date_time.day;
-    tm.tm_hour = date_time.hours;
-    tm.tm_min = date_time.minutes;
-    tm.tm_sec = date_time.seconds;
-    // timegm() doesn't read tm.tm_isdst, tm.tm_wday, and tm.tm_yday, no need to fill them in.
-
-    time_t timestamp = timegm(&tm);
-    if (timestamp == -1)
-        return Error::from_string_literal("ICC::Profile: dateTimeNumber not representable as timestamp");
-
-    return timestamp;
+    return DateTime {
+        .year = date_time.year,
+        .month = date_time.month,
+        .day = date_time.day,
+        .hours = date_time.hours,
+        .minutes = date_time.minutes,
+        .seconds = date_time.seconds,
+    };
 }
 
 ErrorOr<u32> parse_size(ICCHeader const& header, ReadonlyBytes icc_bytes)
@@ -183,7 +154,7 @@ ErrorOr<ColorSpace> parse_connection_space(ICCHeader const& header)
     return space;
 }
 
-ErrorOr<time_t> parse_creation_date_time(ICCHeader const& header)
+ErrorOr<DateTime> parse_creation_date_time(ICCHeader const& header)
 {
     // ICC v4, 7.2.8 Date and time field
     return parse_date_time_number(header.profile_creation_time);
@@ -275,8 +246,20 @@ ErrorOr<XYZ> parse_pcs_illuminant(ICCHeader const& header)
     // ICC v4, 7.2.16 PCS illuminant field
     XYZ xyz = (XYZ)header.pcs_illuminant;
 
-    /// "The value, when rounded to four decimals, shall be X = 0,9642, Y = 1,0 and Z = 0,8249."
-    if (round(xyz.X * 10'000) != 9'642 || round(xyz.Y * 10'000) != 10'000 || round(xyz.Z * 10'000) != 8'249)
+    // "The value, when rounded to four decimals, shall be X = 0,9642, Y = 1,0 and Z = 0,8249."
+    // The v2 spec also says that this should be D50 (icc30.pdf, 8.1 "This must correspond to D50.", same in all newer versions of the v2 spec),
+    // but in practice there are v2 profiles with this set to D65 white instead of D50 white.
+    bool is_d65 = (round(xyz.X * 10'000) == 9'505 && round(xyz.Y * 10'000) == 10'000 && round(xyz.Z * 10'000) == 10'890);
+    if (header.profile_version_major <= 2 && is_d65) {
+        // FIXME: We might have to remap other values here too?
+        dbgln("ICC::Profile: PCS illuminant is D65, not D50. Setting to D50 and continuing.");
+        xyz.X = 0.9642;
+        xyz.Y = 1.0;
+        xyz.Z = 0.8249;
+        return xyz;
+    }
+
+    if (header.profile_version_major > 2 && (round(xyz.X * 10'000) != 9'642 || round(xyz.Y * 10'000) != 10'000 || round(xyz.Z * 10'000) != 8'249))
         return Error::from_string_literal("ICC::Profile: Invalid pcs illuminant");
 
     return xyz;
@@ -297,7 +280,7 @@ Optional<Creator> parse_profile_creator(ICCHeader const& header)
 }
 
 template<size_t N>
-bool all_bytes_are_zero(const u8 (&bytes)[N])
+bool all_bytes_are_zero(u8 const (&bytes)[N])
 {
     for (u8 byte : bytes) {
         if (byte != 0)
@@ -334,15 +317,15 @@ ErrorOr<void> parse_reserved(ICCHeader const& header)
 }
 }
 
-URL device_manufacturer_url(DeviceManufacturer device_manufacturer)
+URL::URL device_manufacturer_url(DeviceManufacturer device_manufacturer)
 {
-    return URL(ByteString::formatted("https://www.color.org/signatureRegistry/?entityEntry={:c}{:c}{:c}{:c}-{:08X}",
+    return URL::URL(ByteString::formatted("https://www.color.org/signatureRegistry/?entityEntry={:c}{:c}{:c}{:c}-{:08X}",
         device_manufacturer.c0(), device_manufacturer.c1(), device_manufacturer.c2(), device_manufacturer.c3(), device_manufacturer.value));
 }
 
-URL device_model_url(DeviceModel device_model)
+URL::URL device_model_url(DeviceModel device_model)
 {
-    return URL(ByteString::formatted("https://www.color.org/signatureRegistry/deviceRegistry/?entityEntry={:c}{:c}{:c}{:c}-{:08X}",
+    return URL::URL(ByteString::formatted("https://www.color.org/signatureRegistry/deviceRegistry/?entityEntry={:c}{:c}{:c}{:c}-{:08X}",
         device_model.c0(), device_model.c1(), device_model.c2(), device_model.c3(), device_model.value));
 }
 
@@ -356,6 +339,74 @@ DeviceAttributes::DeviceAttributes() = default;
 DeviceAttributes::DeviceAttributes(u64 bits)
     : m_bits(bits)
 {
+}
+
+static ErrorOr<void> validate_date_time(DateTime const& date_time)
+{
+    // Returns if a DateTime is valid per ICC V4, 4.2 dateTimeNumber.
+    // In practice, some profiles contain invalid dates, but we should enforce this for data we write at least.
+
+    // "Number of the month (1 to 12)"
+    if (date_time.month < 1 || date_time.month > 12)
+        return Error::from_string_literal("ICC::Profile: dateTimeNumber month out of bounds");
+
+    // "Number of the day of the month (1 to 31)"
+    if (date_time.day < 1 || date_time.day > 31)
+        return Error::from_string_literal("ICC::Profile: dateTimeNumber day out of bounds");
+
+    // "Number of hours (0 to 23)"
+    if (date_time.hours > 23)
+        return Error::from_string_literal("ICC::Profile: dateTimeNumber hours out of bounds");
+
+    // "Number of minutes (0 to 59)"
+    if (date_time.minutes > 59)
+        return Error::from_string_literal("ICC::Profile: dateTimeNumber minutes out of bounds");
+
+    // "Number of seconds (0 to 59)"
+    // ICC profiles apparently can't be created during leap seconds (seconds would be 60 there, but the spec doesn't allow that).
+    if (date_time.seconds > 59)
+        return Error::from_string_literal("ICC::Profile: dateTimeNumber seconds out of bounds");
+
+    return {};
+}
+
+ErrorOr<time_t> DateTime::to_time_t() const
+{
+    TRY(validate_date_time(*this));
+
+    struct tm tm = {};
+    tm.tm_year = year - 1900;
+    tm.tm_mon = month - 1;
+    tm.tm_mday = day;
+    tm.tm_hour = hours;
+    tm.tm_min = minutes;
+    tm.tm_sec = seconds;
+    // timegm() doesn't read tm.tm_isdst, tm.tm_wday, and tm.tm_yday, no need to fill them in.
+
+    time_t timestamp = timegm(&tm);
+    if (timestamp == -1)
+        return Error::from_string_literal("ICC::Profile: dateTimeNumber not representable as timestamp");
+
+    return timestamp;
+}
+
+ErrorOr<DateTime> DateTime::from_time_t(time_t timestamp)
+{
+    struct tm gmt_tm;
+    if (gmtime_r(&timestamp, &gmt_tm) == NULL)
+        return Error::from_string_literal("ICC::Profile: timestamp not representable as DateTimeNumber");
+
+    // FIXME: Range-check, using something like `TRY(Checked<u16>(x).try_value())`?
+    DateTime result {
+        .year = static_cast<u16>(gmt_tm.tm_year + 1900),
+        .month = static_cast<u16>(gmt_tm.tm_mon + 1),
+        .day = static_cast<u16>(gmt_tm.tm_mday),
+        .hours = static_cast<u16>(gmt_tm.tm_hour),
+        .minutes = static_cast<u16>(gmt_tm.tm_min),
+        .seconds = static_cast<u16>(gmt_tm.tm_sec),
+    };
+    TRY(validate_date_time(result));
+    return result;
 }
 
 static ErrorOr<ProfileHeader> read_header(ReadonlyBytes bytes)
@@ -721,6 +772,10 @@ ErrorOr<void> Profile::check_tag_types()
     // (The macOS 13.1 /System/Library/ColorSync/Profiles/Display\ P3.icc file no longer has this quirk.)
     static constexpr Crypto::Hash::MD5::DigestType apple_p3_2015_id = { 0xe5, 0xbb, 0x0e, 0x98, 0x67, 0xbd, 0x46, 0xcd, 0x4b, 0xbe, 0x44, 0x6e, 0xbd, 0x1b, 0x75, 0x98 };
 
+    // Profile ID of the "Display P3" profile in object 881 in https://fredrikbk.com/publications/copy-and-patch.pdf
+    // (The macOS 13.1 /System/Library/ColorSync/Profiles/Display\ P3.icc file no longer has this quirk.)
+    static constexpr Crypto::Hash::MD5::DigestType apple_p3_2017_id = { 0xca, 0x1a, 0x95, 0x82, 0x25, 0x7f, 0x10, 0x4d, 0x38, 0x99, 0x13, 0xd5, 0xd1, 0xea, 0x15, 0x82 };
+
     auto has_type = [&](auto tag, std::initializer_list<TagTypeSignature> types, std::initializer_list<TagTypeSignature> v4_types) {
         if (auto type = m_tag_table.get(tag); type.has_value()) {
             auto type_matches = [&](auto wanted_type) { return type.value()->type() == wanted_type; };
@@ -875,7 +930,7 @@ ErrorOr<void> Profile::check_tag_types()
         // The v4 spec requires multiLocalizedUnicodeType for this, but I'm aware of a single file
         // that still uses the v2 'text' type here: /System/Library/ColorSync/Profiles/ITU-2020.icc on macOS 13.1.
         // https://openradar.appspot.com/radar?id=5529765549178880
-        bool has_v2_cprt_type_in_v4_file_quirk = id() == apple_itu_2020_id || id() == apple_p3_2015_id;
+        bool has_v2_cprt_type_in_v4_file_quirk = id() == apple_itu_2020_id || id() == apple_p3_2015_id || id() == apple_p3_2017_id;
         if (is_v4() && type.value()->type() != MultiLocalizedUnicodeTagData::Type && (!has_v2_cprt_type_in_v4_file_quirk || type.value()->type() != TextTagData::Type))
             return Error::from_string_literal("ICC::Profile: copyrightTag has unexpected v4 type");
         if (is_v2() && type.value()->type() != TextTagData::Type)
@@ -1064,7 +1119,7 @@ ErrorOr<void> Profile::check_tag_types()
         // The v4 spec requires multiLocalizedUnicodeType for this, but I'm aware of a single file
         // that still uses the v2 'desc' type here: /System/Library/ColorSync/Profiles/ITU-2020.icc on macOS 13.1.
         // https://openradar.appspot.com/radar?id=5529765549178880
-        bool has_v2_desc_type_in_v4_file_quirk = id() == apple_itu_2020_id || id() == apple_p3_2015_id;
+        bool has_v2_desc_type_in_v4_file_quirk = id() == apple_itu_2020_id || id() == apple_p3_2015_id || id() == apple_p3_2017_id;
         if (is_v4() && type.value()->type() != MultiLocalizedUnicodeTagData::Type && (!has_v2_desc_type_in_v4_file_quirk || type.value()->type() != TextDescriptionTagData::Type))
             return Error::from_string_literal("ICC::Profile: profileDescriptionTag has unexpected v4 type");
         if (is_v2() && type.value()->type() != TextDescriptionTagData::Type)
@@ -1186,7 +1241,7 @@ Crypto::Hash::MD5::DigestType Profile::compute_id(ReadonlyBytes bytes)
     //  and profile ID field (bytes 84 to 99)
     //  in the profile header temporarily set to zeros (00h),
     //  shall be used to calculate the ID."
-    const u8 zero[16] = {};
+    u8 const zero[16] = {};
     Crypto::Hash::MD5 md5;
     md5.update(bytes.slice(0, 44));
     md5.update(ReadonlyBytes { zero, 4 }); // profile flags field
@@ -1219,14 +1274,21 @@ ErrorOr<FloatVector3> Profile::to_pcs_a_to_b(TagData const& tag_data, ReadonlyBy
     // Assumes a "normal" device_class() (i.e. not DeviceLink).
     VERIFY(number_of_components_in_color_space(connection_space()) == 3);
 
+    if (m_to_pcs_clut_cache.has_value() && m_to_pcs_clut_cache->key == color)
+        return m_to_pcs_clut_cache->value;
+
+    FloatVector3 result;
+
     switch (tag_data.type()) {
     case Lut16TagData::Type: {
         auto const& a_to_b = static_cast<Lut16TagData const&>(tag_data);
-        return a_to_b.evaluate(data_color_space(), connection_space(), color);
+        result = TRY(a_to_b.evaluate(data_color_space(), connection_space(), color));
+        break;
     }
     case Lut8TagData::Type: {
         auto const& a_to_b = static_cast<Lut8TagData const&>(tag_data);
-        return a_to_b.evaluate(data_color_space(), connection_space(), color);
+        result = TRY(a_to_b.evaluate(data_color_space(), connection_space(), color));
+        break;
     }
     case LutAToBTagData::Type: {
         auto const& a_to_b = static_cast<LutAToBTagData const&>(tag_data);
@@ -1236,10 +1298,19 @@ ErrorOr<FloatVector3> Profile::to_pcs_a_to_b(TagData const& tag_data, ReadonlyBy
         if (a_to_b.number_of_output_channels() != number_of_components_in_color_space(connection_space()))
             return Error::from_string_literal("ICC::Profile::to_pcs_a_to_b: mAB output channel count does not match profile connection space size");
 
-        return a_to_b.evaluate(connection_space(), color);
+        result = TRY(a_to_b.evaluate(connection_space(), color));
+        break;
     }
+    default:
+        VERIFY_NOT_REACHED();
     }
-    VERIFY_NOT_REACHED();
+
+    if (!m_to_pcs_clut_cache.has_value())
+        m_to_pcs_clut_cache = OneElementCLUTCache {};
+    m_to_pcs_clut_cache->key = Vector<u8, 4>(color);
+    m_to_pcs_clut_cache->value = result;
+
+    return result;
 }
 
 ErrorOr<FloatVector3> Profile::to_pcs(ReadonlyBytes color) const

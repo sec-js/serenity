@@ -6,8 +6,10 @@
 
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/SVGForeignObjectElementPrototype.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/Layout/BlockContainer.h>
+#include <LibWeb/Layout/SVGForeignObjectBox.h>
 #include <LibWeb/SVG/AttributeNames.h>
 #include <LibWeb/SVG/SVGAnimatedLength.h>
 #include <LibWeb/SVG/SVGForeignObjectElement.h>
@@ -27,7 +29,7 @@ SVGForeignObjectElement::~SVGForeignObjectElement() = default;
 void SVGForeignObjectElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::SVGForeignObjectElementPrototype>(realm, "SVGForeignObjectElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(SVGForeignObjectElement);
 
     // FIXME: These never actually get updated!
     m_x = SVGAnimatedLength::create(realm, SVGLength::create(realm, 0, 0), SVGLength::create(realm, 0, 0));
@@ -47,7 +49,7 @@ void SVGForeignObjectElement::visit_edges(Cell::Visitor& visitor)
 
 JS::GCPtr<Layout::Node> SVGForeignObjectElement::create_layout_node(NonnullRefPtr<CSS::StyleProperties> style)
 {
-    return heap().allocate_without_realm<Layout::BlockContainer>(document(), this, move(style));
+    return heap().allocate_without_realm<Layout::SVGForeignObjectBox>(document(), *this, move(style));
 }
 
 void SVGForeignObjectElement::apply_presentational_hints(CSS::StyleProperties& style) const

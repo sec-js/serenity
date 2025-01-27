@@ -17,7 +17,6 @@
 #include <LibCrypto/Curves/Ed25519.h>
 #include <LibCrypto/Curves/SECPxxxr1.h>
 #include <LibCrypto/PK/Code/EMSA_PKCS1_V1_5.h>
-#include <LibCrypto/PK/Code/EMSA_PSS.h>
 #include <LibFileSystem/FileSystem.h>
 #include <LibTLS/Certificate.h>
 #include <LibTLS/TLSv12.h>
@@ -104,15 +103,15 @@ void TLSv12::consume(ReadonlyBytes record)
 
 bool Certificate::is_valid() const
 {
-    auto now = Core::DateTime::now();
+    auto now = UnixDateTime::now();
 
     if (now < validity.not_before) {
-        dbgln("certificate expired (not yet valid, signed for {})", validity.not_before.to_byte_string());
+        dbgln("certificate expired (not yet valid, signed for {})", Core::DateTime::from_timestamp(validity.not_before.seconds_since_epoch()));
         return false;
     }
 
     if (validity.not_after < now) {
-        dbgln("certificate expired (expiry date {})", validity.not_after.to_byte_string());
+        dbgln("certificate expired (expiry date {})", Core::DateTime::from_timestamp(validity.not_after.seconds_since_epoch()));
         return false;
     }
 
@@ -547,16 +546,19 @@ Vector<Certificate> TLSv12::parse_pem_certificate(ReadonlyBytes certificate_pem_
     return { move(certificate) };
 }
 
-static String s_default_ca_certificate_path;
+static Vector<ByteString> s_default_ca_certificate_paths;
 
-void DefaultRootCACertificates::set_default_certificate_path(String path)
+void DefaultRootCACertificates::set_default_certificate_paths(Span<ByteString> paths)
 {
-    s_default_ca_certificate_path = move(path);
+    s_default_ca_certificate_paths.clear();
+    s_default_ca_certificate_paths.ensure_capacity(paths.size());
+    for (auto& path : paths)
+        s_default_ca_certificate_paths.unchecked_append(path);
 }
 
 DefaultRootCACertificates::DefaultRootCACertificates()
 {
-    auto load_result = load_certificates(s_default_ca_certificate_path);
+    auto load_result = load_certificates(s_default_ca_certificate_paths);
     if (load_result.is_error()) {
         dbgln("Failed to load CA Certificates: {}", load_result.error());
         return;
@@ -567,11 +569,11 @@ DefaultRootCACertificates::DefaultRootCACertificates()
 
 DefaultRootCACertificates& DefaultRootCACertificates::the()
 {
-    static DefaultRootCACertificates s_the;
+    static thread_local DefaultRootCACertificates s_the;
     return s_the;
 }
 
-ErrorOr<Vector<Certificate>> DefaultRootCACertificates::load_certificates(StringView custom_cert_path)
+ErrorOr<Vector<Certificate>> DefaultRootCACertificates::load_certificates(Span<ByteString> custom_cert_paths)
 {
     auto cacert_file_or_error = Core::File::open("/etc/cacert.pem"sv, Core::File::OpenMode::Read);
     ByteBuffer data;
@@ -588,9 +590,11 @@ ErrorOr<Vector<Certificate>> DefaultRootCACertificates::load_certificates(String
         TRY(data.try_append(TRY(user_cert_file->read_until_eof())));
     }
 
-    if (!custom_cert_path.is_empty() && FileSystem::exists(custom_cert_path)) {
-        auto custom_cert_file = TRY(Core::File::open(custom_cert_path, Core::File::OpenMode::Read));
-        TRY(data.try_append(TRY(custom_cert_file->read_until_eof())));
+    for (auto& custom_cert_path : custom_cert_paths) {
+        if (FileSystem::exists(custom_cert_path)) {
+            auto custom_cert_file = TRY(Core::File::open(custom_cert_path, Core::File::OpenMode::Read));
+            TRY(data.try_append(TRY(custom_cert_file->read_until_eof())));
+        }
     }
 
     return TRY(parse_pem_root_certificate_authorities(data));
@@ -618,7 +622,7 @@ ErrorOr<Vector<Certificate>> DefaultRootCACertificates::parse_pem_root_certifica
         }
     }
 
-    dbgln("Loaded {} of {} ({:.2}%) provided CA Certificates", certificates.size(), certs.size(), (certificates.size() * 100.0) / certs.size());
+    dbgln_if(TLS_DEBUG, "Loaded {} of {} ({:.2}%) provided CA Certificates", certificates.size(), certs.size(), (certificates.size() * 100.0) / certs.size());
 
     return certificates;
 }

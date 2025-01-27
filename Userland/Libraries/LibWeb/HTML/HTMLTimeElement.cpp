@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLTimeElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/HTML/HTMLTimeElement.h>
 
@@ -19,7 +20,7 @@ HTMLTimeElement::HTMLTimeElement(DOM::Document& document, DOM::QualifiedName qua
 void HTMLTimeElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLTimeElementPrototype>(realm, "HTMLTimeElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLTimeElement);
 }
 
 HTMLTimeElement::~HTMLTimeElement() = default;

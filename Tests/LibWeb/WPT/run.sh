@@ -11,9 +11,10 @@ then
 fi
 
 
-WEBDRIVER_BINARY=$(env PATH="${SERENITY_SOURCE_DIR}/Build/lagom/bin:${SERENITY_SOURCE_DIR}/Meta/Lagom/Build/bin:${PATH}" \
-                   which WebDriver)
+: "${WEBDRIVER_BINARY:=$(env PATH="${SERENITY_SOURCE_DIR}/Build/lagom/bin/Ladybird.app/Contents/MacOS:${SERENITY_SOURCE_DIR}/Build/lagom/bin:${SERENITY_SOURCE_DIR}/Meta/Lagom/Build/bin:${PATH}" \
+                         which WebDriver)}"
 update_expectations_metadata=false
+remove_wpt_repository=false
 
 for arg in "$@"; do
   case $arg in
@@ -23,6 +24,10 @@ for arg in "$@"; do
         ;;
     --update-expectations-metadata)
         update_expectations_metadata=true
+        shift
+        ;;
+    --remove-wpt-repository)
+        remove_wpt_repository=true
         shift
         ;;
     *)
@@ -41,10 +46,15 @@ pushd "${SCRIPT_DIR}"
 
 if [ ! -d "${SCRIPT_DIR}/wpt" ]; then
     # Clone patched web-platform-tests repository
-    git clone --depth 10000 https://github.com/web-platform-tests/wpt.git
+    mkdir wpt
+    git -C wpt init
+    git -C wpt remote add origin https://github.com/web-platform-tests/wpt.git
 
     # Switch to the commit that was used to generate tests expectations. Requires periodic updates.
-    git -C wpt checkout eedf737ce39c512d0ca3471f988972e3ece11822
+    git -C wpt fetch --depth 1 origin 5930e386a5e1e59456dc810c9b21adf18bc1b6fe
+    git -C wpt checkout FETCH_HEAD
+
+    git apply 0001-tools-Pass-product-name-to-update-metadata-fallback-.patch
 
     # Update hosts file if needed
     if [ "$(comm -13 <(sort -u /etc/hosts) <(python3 ./wpt/wpt make-hosts-file | sort -u) | wc -l)" -gt 0 ]; then
@@ -68,12 +78,19 @@ python3 ./wpt/wpt run ladybird \
                   --include-manifest include.ini \
                   --metadata ./metadata \
                   --manifest ./MANIFEST.json \
+                  --webdriver-arg="--certificate=${PWD}/wpt/tools/certs/cacert.pem" \
+                  --webdriver-arg="--certificate=${SERENITY_SOURCE_DIR}/Build/lagom/cacert.pem" \
+                  --webdriver-arg="--enable-qt-networking" \
                   --log-raw "${wpt_run_log_filename}"
 
 # Update expectations metadata files if requested
 if [[ $update_expectations_metadata == true ]]; then
     python3 ./wpt/wpt update-expectations --product ladybird --metadata ./metadata --manifest ./MANIFEST.json "${wpt_run_log_filename}"
     python3 ./concat-extract-metadata.py --concat ./metadata > metadata.txt
+fi
+
+if [[ $remove_wpt_repository == true ]]; then
+    rm -rf wpt
 fi
 
 popd

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLSpanElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/HTML/HTMLSpanElement.h>
 
@@ -21,7 +22,7 @@ HTMLSpanElement::~HTMLSpanElement() = default;
 void HTMLSpanElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLSpanElementPrototype>(realm, "HTMLSpanElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLSpanElement);
 }
 
 }

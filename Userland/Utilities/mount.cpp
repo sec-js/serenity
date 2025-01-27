@@ -7,6 +7,7 @@
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
+#include <AK/String.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/DirIterator.h>
 #include <LibCore/File.h>
@@ -42,6 +43,10 @@ static int parse_options(StringView options)
             flags |= MS_AXALLOWED;
         else if (part == "noregular")
             flags |= MS_NOREGULAR;
+        else if (part == "srchidden")
+            flags |= MS_SRCHIDDEN;
+        else if (part == "immutable")
+            flags |= MS_IMMUTABLE;
         else
             warnln("Ignoring invalid option: {}", part);
     }
@@ -98,11 +103,11 @@ static bool mount_by_line(ByteString const& line)
     ErrorOr<void> error_or_void;
 
     if (flags & MS_BIND)
-        error_or_void = Core::System::bindmount(fd, mountpoint, flags & ~MS_BIND);
+        error_or_void = Core::System::bindmount({}, fd, mountpoint, flags & ~MS_BIND);
     else if (flags & MS_REMOUNT)
-        error_or_void = Core::System::remount(mountpoint, flags & ~MS_REMOUNT);
+        error_or_void = Core::System::remount({}, mountpoint, flags & ~MS_REMOUNT);
     else
-        error_or_void = Core::System::mount(fd, mountpoint, fstype, flags);
+        error_or_void = Core::System::mount({}, fd, mountpoint, fstype, flags);
 
     if (error_or_void.is_error()) {
         warnln("Failed to mount {} (FD: {}) ({}) on {}: {}", filename, fd, fstype, mountpoint, error_or_void.error());
@@ -176,10 +181,14 @@ static ErrorOr<void> print_mounts()
         else
             out("rw");
 
+        if (mount_flags & MS_IMMUTABLE)
+            out(",immutable");
         if (mount_flags & MS_NODEV)
             out(",nodev");
         if (mount_flags & MS_NOREGULAR)
             out(",noregular");
+        if (mount_flags & MS_SRCHIDDEN)
+            out(",srchidden");
         if (mount_flags & MS_NOEXEC)
             out(",noexec");
         if (mount_flags & MS_NOSUID)
@@ -195,6 +204,21 @@ static ErrorOr<void> print_mounts()
     });
 
     return {};
+}
+
+static ErrorOr<void> mount_using_loop_device(int inode_fd, StringView mountpoint, StringView fs_type, int flags)
+{
+    int devctl_fd = TRY(Core::System::open("/dev/devctl"sv, O_RDONLY));
+    int value = inode_fd;
+    TRY(Core::System::ioctl(devctl_fd, DEVCTL_CREATE_LOOP_DEVICE, &value));
+    int loop_device_index = value;
+
+    auto loop_device_path = TRY(String::formatted("/dev/loop/{}", loop_device_index));
+    int loop_device_fd = TRY(Core::System::open(loop_device_path.bytes_as_string_view(), O_RDONLY));
+
+    auto result = Core::System::mount({}, loop_device_fd, mountpoint, fs_type, flags);
+    TRY(Core::System::ioctl(devctl_fd, DEVCTL_DESTROY_LOOP_DEVICE, &loop_device_index));
+    return result;
 }
 
 ErrorOr<int> serenity_main(Main::Arguments arguments)
@@ -227,7 +251,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         int flags = !options.is_empty() ? parse_options(options) : 0;
         if (!(flags & MS_REMOUNT))
             return Error::from_string_literal("Expected valid source.");
-        TRY(Core::System::remount(mountpoint, flags & ~MS_REMOUNT));
+        TRY(Core::System::remount({}, mountpoint, flags & ~MS_REMOUNT));
         return 0;
     }
 
@@ -236,13 +260,20 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         int const fd = TRY(get_source_fd(source));
 
         if (flags & MS_BIND) {
-            TRY(Core::System::bindmount(fd, mountpoint, flags & ~MS_BIND));
+            TRY(Core::System::bindmount({}, fd, mountpoint, flags & ~MS_BIND));
         } else if (flags & MS_REMOUNT) {
-            TRY(Core::System::remount(mountpoint, flags & ~MS_REMOUNT));
+            TRY(Core::System::remount({}, mountpoint, flags & ~MS_REMOUNT));
         } else {
             if (fs_type.is_empty())
                 fs_type = "ext2"sv;
-            TRY(Core::System::mount(fd, mountpoint, fs_type, flags));
+            if (fd >= 0) {
+                auto stat = TRY(Core::System::fstat(fd));
+                if (!S_ISBLK(stat.st_mode)) {
+                    TRY(mount_using_loop_device(fd, mountpoint, fs_type, flags));
+                    return 0;
+                }
+            }
+            TRY(Core::System::mount({}, fd, mountpoint, fs_type, flags));
         }
         return 0;
     }

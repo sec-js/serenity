@@ -17,7 +17,7 @@ class AnimationTimeline : public Bindings::PlatformObject {
 
 public:
     Optional<double> current_time() const { return m_current_time; }
-    virtual WebIDL::ExceptionOr<void> set_current_time(Optional<double>);
+    virtual void set_current_time(Optional<double>);
 
     JS::GCPtr<DOM::Document> associated_document() const { return m_associated_document; }
     void set_associated_document(JS::GCPtr<DOM::Document>);
@@ -26,19 +26,19 @@ public:
     bool is_monotonically_increasing() const { return m_is_monotonically_increasing; }
 
     // https://www.w3.org/TR/web-animations-1/#timeline-time-to-origin-relative-time
-    virtual Optional<double> convert_a_timeline_time_to_an_original_relative_time(Optional<double>) { VERIFY_NOT_REACHED(); }
-    virtual bool can_convert_a_timeline_time_to_an_original_relative_time() const { return false; }
+    virtual Optional<double> convert_a_timeline_time_to_an_origin_relative_time(Optional<double>) { VERIFY_NOT_REACHED(); }
+    virtual bool can_convert_a_timeline_time_to_an_origin_relative_time() const { return false; }
 
     void associate_with_animation(JS::NonnullGCPtr<Animation> value) { m_associated_animations.set(value); }
     void disassociate_with_animation(JS::NonnullGCPtr<Animation> value) { m_associated_animations.remove(value); }
-    HashTable<JS::NonnullGCPtr<Animation>> const& associated_animations() const;
+    HashTable<JS::NonnullGCPtr<Animation>> const& associated_animations() const { return m_associated_animations; }
 
 protected:
     AnimationTimeline(JS::Realm&);
-    virtual ~AnimationTimeline() override;
 
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
+    virtual void finalize() override;
 
     // https://www.w3.org/TR/web-animations-1/#dom-animationtimeline-currenttime
     Optional<double> m_current_time {};

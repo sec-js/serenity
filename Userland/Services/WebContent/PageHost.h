@@ -24,10 +24,9 @@ public:
     static NonnullOwnPtr<PageHost> create(ConnectionFromClient& client) { return adopt_own(*new PageHost(client)); }
     virtual ~PageHost();
 
-    Function<void(WebDriverConnection&)> on_webdriver_connection;
-
-    PageClient& page(u64 index) { return *m_pages.find(index)->value; }
+    Optional<PageClient&> page(u64 index);
     PageClient& create_page();
+    void remove_page(Badge<PageClient>, u64 index);
 
     ConnectionFromClient& client() const { return m_client; }
 

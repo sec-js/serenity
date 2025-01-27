@@ -46,8 +46,6 @@ public:
 
     bool is_simple_storage() const { return m_is_simple_storage; }
 
-    static FlatPtr is_simple_storage_offset() { return OFFSET_OF(IndexedPropertyStorage, m_is_simple_storage); }
-
 protected:
     explicit IndexedPropertyStorage(IsSimpleStorage is_simple_storage)
         : m_is_simple_storage(is_simple_storage == IsSimpleStorage::Yes) {};
@@ -76,8 +74,17 @@ public:
 
     Vector<Value> const& elements() const { return m_packed_elements; }
 
-    static FlatPtr array_size_offset() { return OFFSET_OF(SimpleIndexedPropertyStorage, m_array_size); }
-    static FlatPtr elements_offset() { return OFFSET_OF(SimpleIndexedPropertyStorage, m_packed_elements); }
+    [[nodiscard]] bool inline_has_index(u32 index) const
+    {
+        return index < m_array_size && !m_packed_elements.data()[index].is_empty();
+    }
+
+    [[nodiscard]] Optional<ValueAndAttributes> inline_get(u32 index) const
+    {
+        if (!inline_has_index(index))
+            return {};
+        return ValueAndAttributes { m_packed_elements.data()[index], default_attributes };
+    }
 
 private:
     friend GenericIndexedPropertyStorage;
@@ -128,6 +135,7 @@ private:
 
     IndexedProperties const& m_indexed_properties;
     Vector<u32> m_cached_indices;
+    size_t m_next_cached_index { 0 };
     u32 m_index { 0 };
     bool m_skip_empty { false };
 };
@@ -176,8 +184,6 @@ public:
                 callback(element.value.value);
         }
     }
-
-    static FlatPtr storage_offset() { return OFFSET_OF(IndexedProperties, m_storage); }
 
 private:
     void switch_to_generic_storage();

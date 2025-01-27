@@ -8,7 +8,7 @@
 
 #include "Function.h"
 #include "Parser/CppASTConverter.h"
-#include "Parser/SpecParser.h"
+#include "Parser/SpecificationParsing.h"
 
 namespace JSSpecCompiler {
 
@@ -28,7 +28,13 @@ NonnullRefPtr<FunctionDefinition> CppASTConverter::convert()
     for (auto const& parameter : m_function->parameters())
         arguments.append({ .name = parameter->full_name() });
 
-    return make_ref_counted<FunctionDefinition>(name, tree, move(arguments));
+    return make_ref_counted<FunctionDefinition>(
+        AbstractOperationDeclaration {
+            .name = MUST(FlyString::from_utf8(name)),
+            .arguments = move(arguments),
+        },
+        Location {},
+        tree);
 }
 
 template<>
@@ -126,7 +132,8 @@ template<>
 NullableTree CppASTConverter::convert_node(Cpp::NumericLiteral const& literal)
 {
     // TODO: Numerical literals are not limited to i64.
-    return make_ref_counted<MathematicalConstant>(literal.value().to_number<i64>().value());
+    VERIFY(literal.value().to_number<i64>().has_value());
+    return make_ref_counted<MathematicalConstant>(MUST(Crypto::BigFraction::from_string(literal.value())));
 }
 
 template<>

@@ -28,7 +28,7 @@ public:
     static NonnullRefPtr<WebSocket> create(ConnectionInfo, RefPtr<WebSocketImpl> = nullptr);
     virtual ~WebSocket() override = default;
 
-    URL const& url() const { return m_connection.url(); }
+    URL::URL const& url() const { return m_connection.url(); }
 
     ReadyState ready_state();
 
@@ -104,6 +104,8 @@ private:
     bool m_has_read_server_handshake_upgrade { false };
     bool m_has_read_server_handshake_connection { false };
     bool m_has_read_server_handshake_accept { false };
+
+    bool m_discard_connection_requested { false };
 
     u16 m_last_close_code { 1005 };
     ByteString m_last_close_message;

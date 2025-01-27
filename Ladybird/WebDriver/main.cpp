@@ -16,13 +16,15 @@
 #include <LibMain/Main.h>
 #include <WebDriver/Client.h>
 
+static Vector<ByteString> certificates;
+
 static ErrorOr<pid_t> launch_process(StringView application, ReadonlySpan<char const*> arguments)
 {
     auto paths = TRY(get_paths_for_helper_process(application));
 
     ErrorOr<pid_t> result = -1;
     for (auto const& path : paths) {
-        auto path_view = path.bytes_as_string_view();
+        auto path_view = path.view();
         result = Core::Process::spawn(path_view, arguments, {}, Core::Process::KeepAsChild::Yes);
         if (!result.is_error())
             break;
@@ -30,14 +32,27 @@ static ErrorOr<pid_t> launch_process(StringView application, ReadonlySpan<char c
     return result;
 }
 
-static ErrorOr<pid_t> launch_browser(ByteString const& socket_path)
+static ErrorOr<pid_t> launch_browser(ByteString const& socket_path, bool use_qt_networking)
 {
-    return launch_process("Ladybird"sv,
-        Array {
-            "--webdriver-content-path",
-            socket_path.characters(),
-            "about:blank",
-        });
+    auto arguments = Vector {
+        "--webdriver-content-path",
+        socket_path.characters(),
+    };
+
+    Vector<ByteString> certificate_args;
+    for (auto const& certificate : certificates) {
+        certificate_args.append(ByteString::formatted("--certificate={}", certificate));
+        arguments.append(certificate_args.last().view().characters_without_null_termination());
+    }
+
+    arguments.append("--allow-popups");
+    arguments.append("--force-new-process");
+    if (use_qt_networking)
+        arguments.append("--enable-qt-networking");
+
+    arguments.append("about:blank");
+
+    return launch_process("Ladybird"sv, arguments.span());
 }
 
 static ErrorOr<pid_t> launch_headless_browser(ByteString const& socket_path)
@@ -59,10 +74,13 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 
     auto listen_address = "0.0.0.0"sv;
     int port = 8000;
+    bool enable_qt_networking = false;
 
     Core::ArgsParser args_parser;
     args_parser.add_option(listen_address, "IP address to listen on", "listen-address", 'l', "listen_address");
     args_parser.add_option(port, "Port to listen on", "port", 'p', "port");
+    args_parser.add_option(certificates, "Path to a certificate file", "certificate", 'C', "certificate");
+    args_parser.add_option(enable_qt_networking, "Launch browser with Qt networking enabled", "enable-qt-networking");
     args_parser.parse(arguments);
 
     auto ipv4_address = IPv4Address::from_string(listen_address);
@@ -98,7 +116,11 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
             return;
         }
 
-        auto maybe_client = WebDriver::Client::try_create(maybe_buffered_socket.release_value(), { launch_browser, launch_headless_browser }, server);
+        auto launch_browser_callback = [&](ByteString const& socket_path) {
+            return launch_browser(socket_path, enable_qt_networking);
+        };
+
+        auto maybe_client = WebDriver::Client::try_create(maybe_buffered_socket.release_value(), { move(launch_browser_callback), launch_headless_browser }, server);
         if (maybe_client.is_error()) {
             warnln("Could not create a WebDriver client: {}", maybe_client.error());
             return;

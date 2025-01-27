@@ -42,19 +42,17 @@ class AsyncBlockDeviceRequest;
 struct NVMeIO {
     void clear()
     {
-        used = false;
         request = nullptr;
         end_io_handler = nullptr;
     }
     RefPtr<AsyncBlockDeviceRequest> request;
-    bool used = false;
     Function<void(u16 status)> end_io_handler;
 };
 
 class NVMeController;
 class NVMeQueue : public AtomicRefCounted<NVMeQueue> {
 public:
-    static ErrorOr<NonnullLockRefPtr<NVMeQueue>> try_create(NVMeController& device, u16 qid, u8 irq, u32 q_depth, OwnPtr<Memory::Region> cq_dma_region, OwnPtr<Memory::Region> sq_dma_region, Doorbell db_regs, QueueType queue_type);
+    static ErrorOr<NonnullLockRefPtr<NVMeQueue>> try_create(NVMeController& device, u16 qid, Optional<u8> irq, u32 q_depth, OwnPtr<Memory::Region> cq_dma_region, OwnPtr<Memory::Region> sq_dma_region, Doorbell db_regs, QueueType queue_type);
     bool is_admin_queue() { return m_admin_queue; }
     u16 submit_sync_sqe(NVMeSubmission&);
     void read(AsyncBlockDeviceRequest& request, u16 nsid, u64 index, u32 count);
@@ -85,7 +83,7 @@ protected:
             m_db_regs.mmio_reg->sq_tail = m_sq_tail;
     }
 
-    NVMeQueue(NonnullOwnPtr<Memory::Region> rw_dma_region, Memory::PhysicalPage const& rw_dma_page, u16 qid, u32 q_depth, OwnPtr<Memory::Region> cq_dma_region, OwnPtr<Memory::Region> sq_dma_region, Doorbell db_regs);
+    NVMeQueue(NonnullOwnPtr<Memory::Region> rw_dma_region, Memory::PhysicalRAMPage const& rw_dma_page, u16 qid, u32 q_depth, OwnPtr<Memory::Region> cq_dma_region, OwnPtr<Memory::Region> sq_dma_region, Doorbell db_regs);
 
     [[nodiscard]] u32 get_request_cid()
     {
@@ -100,10 +98,11 @@ protected:
         }
     }
 
+    virtual void complete_current_request(u16 cmdid, u16 status);
+
 private:
     bool cqe_available();
     void update_cqe_head();
-    virtual void complete_current_request(u16 cmdid, u16 status) = 0;
     void update_cq_doorbell()
     {
         full_memory_barrier();
@@ -113,10 +112,8 @@ private:
     }
 
 protected:
-    Spinlock<LockRank::Interrupts> m_cq_lock {};
-    HashMap<u16, NVMeIO> m_requests;
+    SpinlockProtected<HashMap<u16, NVMeIO>, LockRank::None> m_requests;
     NonnullOwnPtr<Memory::Region> m_rw_dma_region;
-    Spinlock<LockRank::None> m_request_lock {};
 
 private:
     u16 m_qid {};
@@ -133,6 +130,6 @@ private:
     Span<NVMeCompletion> m_cqe_array;
     WaitQueue m_sync_wait_queue;
     Doorbell m_db_regs;
-    NonnullRefPtr<Memory::PhysicalPage const> const m_rw_dma_page;
+    NonnullRefPtr<Memory::PhysicalRAMPage const> const m_rw_dma_page;
 };
 }

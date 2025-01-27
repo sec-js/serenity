@@ -12,9 +12,6 @@
 #include <LibGfx/Font/Font.h>
 #include <LibGfx/Font/VectorFont.h>
 
-#define POINTS_PER_INCH 72.0f
-#define DEFAULT_DPI 96
-
 namespace Gfx {
 
 struct GlyphIndexWithSubpixelOffset {
@@ -72,7 +69,8 @@ public:
     virtual String qualified_name() const override { return MUST(String::formatted("{} {} {} {}", family(), presentation_size(), weight(), slope())); }
     virtual String human_readable_name() const override { return MUST(String::formatted("{} {} {}", family(), variant(), presentation_size())); }
 
-    virtual RefPtr<Font> with_size(float point_size) const override;
+    virtual NonnullRefPtr<ScaledFont> scaled_with_size(float point_size) const;
+    virtual NonnullRefPtr<Font> with_size(float point_size) const override;
 
     virtual bool has_color_bitmaps() const override { return m_font->has_color_bitmaps(); }
 
@@ -82,6 +80,8 @@ private:
     float m_y_scale { 0.0f };
     float m_point_width { 0.0f };
     float m_point_height { 0.0f };
+
+    mutable HashMap<u32, Gfx::Path> m_glyph_cache;
     mutable HashMap<GlyphIndexWithSubpixelOffset, RefPtr<Gfx::Bitmap>> m_cached_glyph_bitmaps;
     Gfx::FontPixelMetrics m_pixel_metrics;
 

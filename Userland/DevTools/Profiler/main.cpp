@@ -172,12 +172,12 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         update_source_model();
     };
 
-    auto disassembly_action = GUI::Action::create_checkable("Show &Disassembly", { Mod_Ctrl, Key_D }, Gfx::Bitmap::load_from_file("/res/icons/16x16/x86.png"sv).release_value_but_fixme_should_propagate_errors(), [&](auto& action) {
+    auto disassembly_action = GUI::Action::create_checkable("Show &Disassembly", { Mod_Ctrl, Key_D }, TRY(Gfx::Bitmap::load_from_file("/res/icons/16x16/x86.png"sv)), [&](auto& action) {
         disassembly_view.set_visible(action.is_checked());
         update_disassembly_model();
     });
 
-    auto source_action = GUI::Action::create_checkable("Show &Source", { Mod_Ctrl, Key_S }, Gfx::Bitmap::load_from_file("/res/icons/16x16/x86.png"sv).release_value_but_fixme_should_propagate_errors(), [&](auto& action) {
+    auto source_action = GUI::Action::create_checkable("Show &Source", { Mod_Ctrl, Key_S }, TRY(Gfx::Bitmap::load_from_file("/res/icons/16x16/x86.png"sv)), [&](auto& action) {
         source_view.set_visible(action.is_checked());
         update_source_model();
     });
@@ -329,7 +329,7 @@ static bool prompt_to_stop_profiling(pid_t pid, ByteString const& process_name)
     clock.start();
     auto update_timer = Core::Timer::create_repeating(100, [&] {
         timer_label.set_text(String::formatted("{:.1} seconds", static_cast<float>(clock.elapsed()) / 1000.0f).release_value_but_fixme_should_propagate_errors());
-    }).release_value_but_fixme_should_propagate_errors();
+    });
     update_timer->start();
 
     auto& stop_button = widget->add<GUI::Button>("Stop"_string);

@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include <AK/URL.h>
+#include <LibURL/URL.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/HTML/EventLoop/Task.h>
 #include <LibWeb/HTML/Navigable.h>
@@ -54,6 +54,7 @@ protected:
     virtual DOM::Document& hyperlink_element_utils_document() = 0;
     virtual Optional<String> hyperlink_element_utils_href() const = 0;
     virtual WebIDL::ExceptionOr<void> set_hyperlink_element_utils_href(String) = 0;
+    virtual Optional<String> hyperlink_element_utils_referrerpolicy() const = 0;
     virtual bool hyperlink_element_utils_is_html_anchor_element() const = 0;
     virtual bool hyperlink_element_utils_is_connected() const = 0;
     virtual String hyperlink_element_utils_get_an_elements_target() const = 0;
@@ -69,7 +70,7 @@ private:
     void update_href();
     bool cannot_navigate() const;
 
-    Optional<AK::URL> m_url;
+    Optional<URL::URL> m_url;
 };
 
 }

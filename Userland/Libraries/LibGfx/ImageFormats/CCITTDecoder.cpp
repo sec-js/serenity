@@ -237,8 +237,8 @@ constexpr Array common_make_up_codes = {
     Code { 2560, 12, 0b000000011111 },
 };
 
-template<size_t Size>
-Optional<Code> get_code_from_table(Array<Code, Size> const& array, u16 code_word, u8 code_size)
+template<typename T, size_t Size>
+Optional<T> get_code_from_table(Array<T, Size> const& array, u16 code_word, u8 code_size)
 {
     for (auto const& code : array) {
         if (code.code_length == code_size && code.code == code_word)
@@ -264,12 +264,61 @@ Optional<Code> get_terminal_code(Color color, u16 code_word, u8 code_size)
     return get_code_from_table(black_terminating_codes, code_word, code_size);
 }
 
-ErrorOr<void> decode_single_ccitt3_1d_line(BigEndianInputBitStream& input_bit_stream, BigEndianOutputBitStream& decoded_bits, u32 image_width)
-{
-    auto const ccitt_white = Color::NamedColor::White;
-    auto const ccitt_black = Color::NamedColor::Black;
+constexpr auto const ccitt_white = Color::NamedColor::White;
+constexpr auto const ccitt_black = Color::NamedColor::Black;
 
-    Color current_color { ccitt_white };
+Color invert(Color current_color)
+{
+    return current_color == ccitt_white ? ccitt_black : ccitt_white;
+}
+
+struct Change {
+    Color color;
+    u32 column;
+};
+
+using ReferenceLine = Vector<Change>;
+
+ErrorOr<u32> read_run_length(BigEndianInputBitStream& input_bit_stream, Optional<ReferenceLine&> reference_line, Color current_color, u32 image_width, u32 column)
+{
+    u8 size {};
+    u16 potential_code {};
+    u32 run_length {};
+    while (size < 14) {
+        potential_code <<= 1;
+        potential_code |= TRY(input_bit_stream.read_bit());
+        size++;
+
+        if (auto const maybe_markup = get_markup_code(current_color, potential_code, size); maybe_markup.has_value()) {
+            run_length += maybe_markup->run_length;
+            // OK, let's reset the loop to read a terminal code now
+            size = 0;
+            potential_code = 0;
+        } else if (auto const maybe_terminal = get_terminal_code(current_color, potential_code, size); maybe_terminal.has_value()) {
+            run_length += maybe_terminal->run_length;
+            if (reference_line.has_value())
+                TRY(reference_line->try_append({ invert(current_color), column + run_length }));
+            break;
+        }
+    }
+
+    if (size == 14)
+        return Error::from_string_literal("TIFFImageDecoderPlugin: Invalid CCITT code");
+
+    if (column + run_length > image_width)
+        return Error::from_string_literal("TIFFImageDecoderPlugin: CCITT codes encode for more than a line");
+
+    return run_length;
+}
+
+ErrorOr<ReferenceLine> decode_single_ccitt3_1d_line(BigEndianInputBitStream& input_bit_stream, BigEndianOutputBitStream& decoded_bits, u32 image_width)
+{
+    // This is only useful for the 2D decoder.
+    ReferenceLine reference_line;
+
+    // We always flip the color when entering the loop, so let's initialize the
+    // color with black to make the first marker actually be white.
+    Color current_color { ccitt_black };
     u32 run_length = 0;
     u32 column = 0;
 
@@ -282,46 +331,229 @@ ErrorOr<void> decode_single_ccitt3_1d_line(BigEndianInputBitStream& input_bit_st
             continue;
         }
 
-        current_color = current_color == ccitt_white ? ccitt_black : ccitt_white;
+        current_color = invert(current_color);
 
-        if (column == 0) {
-            current_color = ccitt_white;
-        }
-
-        u8 size {};
-        u16 potential_code {};
-        while (size < 14) {
-            potential_code <<= 1;
-            potential_code |= TRY(input_bit_stream.read_bit());
-            size++;
-
-            if (auto const maybe_markup = get_markup_code(current_color, potential_code, size); maybe_markup.has_value()) {
-                run_length += maybe_markup->run_length;
-                // OK, let's reset the loop to read a terminal code now
-                size = 0;
-                potential_code = 0;
-            } else if (auto const maybe_terminal = get_terminal_code(current_color, potential_code, size); maybe_terminal.has_value()) {
-                run_length += maybe_terminal->run_length;
-                break;
-            }
-        }
-
-        if (size == 14)
-            return Error::from_string_literal("TIFFImageDecoderPlugin: Invalid CCITT code");
-
-        if (column + run_length > image_width)
-            return Error::from_string_literal("TIFFImageDecoderPlugin: CCITT codes encode for more that a line");
+        run_length += TRY(read_run_length(input_bit_stream, reference_line, current_color, image_width, column));
     }
+
+    TRY(decoded_bits.align_to_byte_boundary());
+
+    return reference_line;
+}
+
+static ErrorOr<void> read_eol(BigEndianInputBitStream& bit_stream, Group3Options::UseFillBits use_fill_bits)
+{
+    constexpr u16 EOL = 0b0000'0000'0001;
+
+    if (use_fill_bits == Group3Options::UseFillBits::Yes) {
+        // TIFF specification, description of the T4Options tag:
+        // "Fill bits have been added as necessary before EOL codes such that
+        // EOL always ends on a byte boundary, thus ensuring an EOL-sequence of 1 byte
+        // preceded by a zero nibble: xxxx-0000 0000-0001."
+        auto const to_skip = (12 + bit_stream.bits_until_next_byte_boundary()) % 8;
+        TRY(bit_stream.read_bits(to_skip));
+    }
+
+    auto const read = TRY(bit_stream.read_bits<u16>(12));
+    if (read != EOL)
+        return Error::from_string_literal("CCITTDecoder: Invalid EndOfLine code");
 
     return {};
 }
 
-static ErrorOr<void> read_eol(BigEndianInputBitStream& bit_stream)
+enum class Mode : u8 {
+    Pass,
+    Horizontal,
+    Vertical_0,
+    Vertical_R1,
+    Vertical_R2,
+    Vertical_R3,
+    Vertical_L1,
+    Vertical_L2,
+    Vertical_L3,
+};
+
+struct ModeCode {
+    u8 code_length {};
+    Mode mode {};
+    u8 code {};
+};
+
+// Table 4/T.4 – Two-dimensional code table
+constexpr Array node_codes = to_array<ModeCode>({
+    { 4, Mode::Pass, 0b0001 },
+    { 3, Mode::Horizontal, 0b001 },
+    { 1, Mode::Vertical_0, 0b1 },
+    { 3, Mode::Vertical_R1, 0b011 },
+    { 6, Mode::Vertical_R2, 0b000011 },
+    { 7, Mode::Vertical_R3, 0b0000011 },
+    { 3, Mode::Vertical_L1, 0b010 },
+    { 6, Mode::Vertical_L2, 0b000010 },
+    { 7, Mode::Vertical_L3, 0b0000010 },
+});
+
+using InvalidResult = u8;
+
+ErrorOr<Variant<ModeCode, InvalidResult>> read_mode(BigEndianInputBitStream& input_bit_stream)
 {
-    constexpr u16 EOL = 0b0000'0000'0001;
-    auto const read = TRY(bit_stream.read_bits<u16>(12));
-    if (read != EOL)
-        return Error::from_string_literal("CCITTDecoder: Invalid EndOfLine code");
+    u8 size {};
+    u8 potential_code {};
+    while (size < 7) {
+        potential_code <<= 1;
+        potential_code |= TRY(input_bit_stream.read_bit());
+        ++size;
+
+        if (auto const maybe_mode = get_code_from_table(node_codes, potential_code, size); maybe_mode.has_value())
+            return *maybe_mode;
+    }
+
+    return Variant<ModeCode, InvalidResult>(InvalidResult { potential_code });
+}
+
+enum class Search : u8 {
+    B1,
+    B2,
+};
+
+struct CCITTStatus {
+    ReferenceLine current_line {};
+    bool has_reached_eol { false };
+};
+
+ErrorOr<CCITTStatus> decode_single_ccitt_2d_line(BigEndianInputBitStream& input_bit_stream, BigEndianOutputBitStream& decoded_bits, ReferenceLine&& reference_line, u32 image_width)
+{
+    CCITTStatus status {};
+    Color current_color { ccitt_white };
+    u32 column {};
+    u32 remainder_from_pass_mode {};
+
+    auto const next_change_on_reference_line = [&]() -> ErrorOr<Change> {
+        // 4.2.1.3.1 Definition of changing picture elements
+        Optional<Change> next_change {}; // This is referred to as b1 in the spec.
+        u32 offset {};
+        while (!next_change.has_value()) {
+            if (reference_line.is_empty() || reference_line.size() <= offset)
+                return Error::from_string_literal("CCITTDecoder: Corrupted stream");
+            auto const change = reference_line[0 + offset];
+            // 4.2.1.3.4 Processing the first and last picture elements in a line
+            // "The first starting picture element a0 on each coding line is imaginarily set at a position just
+            // before the first picture element, and is regarded as a white picture element."
+            // To emulate this behavior we check for column == 0 here.
+            if (change.column <= column && column != 0) {
+                reference_line.take_first();
+                continue;
+            }
+            if (change.color != current_color || change.column == image_width)
+                next_change = change;
+            else
+                offset++;
+        }
+        return *next_change;
+    };
+
+    auto const encode_for = [&](Change change, i8 offset = 0) -> ErrorOr<void> {
+        i32 const to_encode = remainder_from_pass_mode + change.column - column + offset;
+        if (to_encode < 0)
+            return Error::from_string_literal("CCITTDecoder: Corrupted stream");
+        for (i32 i {}; i < to_encode; ++i)
+            TRY(decoded_bits.write_bits(current_color == ccitt_white ? 0u : 1u, 1));
+
+        column = change.column + offset;
+        current_color = invert(current_color);
+        remainder_from_pass_mode = 0;
+
+        TRY(status.current_line.try_empend(current_color, column));
+        return {};
+    };
+
+    while (column < image_width) {
+        auto const maybe_mode = TRY(read_mode(input_bit_stream));
+
+        if (maybe_mode.has<InvalidResult>()) {
+            auto const partially_read_eol = maybe_mode.get<InvalidResult>();
+
+            if (partially_read_eol != 0)
+                return Error::from_string_literal("CCITTDecoder: Unable to find the correct mode");
+
+            auto const remaining_eol = TRY(input_bit_stream.read_bits(5));
+            if (remaining_eol != 1)
+                return Error::from_string_literal("CCITTDecoder: Unable to find the correct mode");
+
+            // We reached EOL
+            status.has_reached_eol = true;
+            break;
+        }
+
+        // Behavior are described here 4.2.1.3.2 Coding modes.
+        switch (maybe_mode.get<ModeCode>().mode) {
+        case Mode::Pass: {
+            auto const column_before = column;
+            // We search for b1.
+            auto change = TRY(next_change_on_reference_line());
+            current_color = change.color;
+            column = change.column;
+
+            // We search for b2, which is the same as searching for b1 after updating the state.
+            change = TRY(next_change_on_reference_line());
+            current_color = change.color;
+            column = change.column;
+
+            remainder_from_pass_mode += column - column_before;
+            break;
+        }
+        case Mode::Horizontal: {
+            // a0a1
+            auto run_length = TRY(read_run_length(input_bit_stream, OptionalNone {}, current_color, image_width, column));
+            TRY(encode_for({ invert(current_color), column + run_length }));
+
+            // a1a2
+            run_length = TRY(read_run_length(input_bit_stream, OptionalNone {}, current_color, image_width, column));
+            TRY(encode_for({ invert(current_color), column + run_length }));
+            break;
+        }
+        case Mode::Vertical_0:
+            TRY(encode_for(TRY(next_change_on_reference_line())));
+            break;
+        case Mode::Vertical_R1:
+            TRY(encode_for(TRY(next_change_on_reference_line()), 1));
+            break;
+        case Mode::Vertical_R2:
+            TRY(encode_for(TRY(next_change_on_reference_line()), 2));
+            break;
+        case Mode::Vertical_R3:
+            TRY(encode_for(TRY(next_change_on_reference_line()), 3));
+            break;
+        case Mode::Vertical_L1:
+            TRY(encode_for(TRY(next_change_on_reference_line()), -1));
+            break;
+        case Mode::Vertical_L2:
+            TRY(encode_for(TRY(next_change_on_reference_line()), -2));
+            break;
+        case Mode::Vertical_L3:
+            TRY(encode_for(TRY(next_change_on_reference_line()), -3));
+            break;
+        default:
+            return Error::from_string_literal("CCITTDecoder: Unsupported mode for 2D decoding");
+        }
+    }
+
+    TRY(decoded_bits.align_to_byte_boundary());
+
+    return status;
+}
+
+ErrorOr<void> decode_single_ccitt3_2d_block(BigEndianInputBitStream& input_bit_stream, BigEndianOutputBitStream& decoded_bits, u32 image_width, u32 image_height, Group3Options::UseFillBits use_fill_bits)
+{
+    ReferenceLine reference_line;
+    for (u32 i = 0; i < image_height; ++i) {
+        TRY(read_eol(input_bit_stream, use_fill_bits));
+        bool const next_is_1D = TRY(input_bit_stream.read_bit()) == 1;
+
+        if (next_is_1D)
+            reference_line = TRY(decode_single_ccitt3_1d_line(input_bit_stream, decoded_bits, image_width));
+        else
+            reference_line = TRY(decode_single_ccitt_2d_line(input_bit_stream, decoded_bits, move(reference_line), image_width)).current_line;
+    }
 
     return {};
 }
@@ -333,7 +565,8 @@ ErrorOr<ByteBuffer> decode_ccitt_rle(ReadonlyBytes bytes, u32 image_width, u32 i
     auto strip_stream = make<FixedMemoryStream>(bytes);
     auto bit_stream = make<BigEndianInputBitStream>(MaybeOwned<Stream>(*strip_stream));
 
-    ByteBuffer decoded_bytes = TRY(ByteBuffer::create_zeroed(ceil_div(image_width * image_height, 8)));
+    // Note: We put image_height extra-space to handle at most one alignment to byte boundary per line.
+    ByteBuffer decoded_bytes = TRY(ByteBuffer::create_zeroed(ceil_div(image_width * image_height, 8) + image_height));
     auto output_stream = make<FixedMemoryStream>(decoded_bytes.bytes());
     auto decoded_bits = make<BigEndianOutputBitStream>(MaybeOwned<Stream>(*output_stream));
 
@@ -341,7 +574,6 @@ ErrorOr<ByteBuffer> decode_ccitt_rle(ReadonlyBytes bytes, u32 image_width, u32 i
         TRY(decode_single_ccitt3_1d_line(*bit_stream, *decoded_bits, image_width));
 
         bit_stream->align_to_byte_boundary();
-        TRY(decoded_bits->align_to_byte_boundary());
     }
 
     return decoded_bytes;
@@ -352,7 +584,8 @@ ErrorOr<ByteBuffer> decode_ccitt_group3(ReadonlyBytes bytes, u32 image_width, u3
     auto strip_stream = make<FixedMemoryStream>(bytes);
     auto bit_stream = make<BigEndianInputBitStream>(MaybeOwned<Stream>(*strip_stream));
 
-    ByteBuffer decoded_bytes = TRY(ByteBuffer::create_zeroed(ceil_div(image_width * image_height, 8)));
+    // Note: We put image_height extra-space to handle at most one alignment to byte boundary per line.
+    ByteBuffer decoded_bytes = TRY(ByteBuffer::create_zeroed(ceil_div(image_width * image_height, 8) + image_height));
     auto output_stream = make<FixedMemoryStream>(decoded_bytes.bytes());
     auto decoded_bits = make<BigEndianOutputBitStream>(MaybeOwned<Stream>(*output_stream));
 
@@ -365,14 +598,43 @@ ErrorOr<ByteBuffer> decode_ccitt_group3(ReadonlyBytes bytes, u32 image_width, u3
         // NOTE: For whatever reason, the last EOL doesn't seem to be included
 
         for (u32 i = 0; i < image_height; ++i) {
-            TRY(read_eol(*bit_stream));
+            if (options.require_end_of_line == Group3Options::RequireEndOfLine::Yes)
+                TRY(read_eol(*bit_stream, options.use_fill_bits));
             TRY(decode_single_ccitt3_1d_line(*bit_stream, *decoded_bits, image_width));
+            if (options.encoded_byte_aligned == Group3Options::EncodedByteAligned::Yes)
+                bit_stream->align_to_byte_boundary();
         }
 
         return decoded_bytes;
     }
 
-    return Error::from_string_literal("CCITT3 2D is not implemented yet :^(");
+    if (options.require_end_of_line == Group3Options::RequireEndOfLine::No || options.encoded_byte_aligned == Group3Options::EncodedByteAligned::Yes)
+        return Error::from_string_literal("CCITTDecoder: Unsupported option for CCITT3 2D decoding");
+
+    TRY(decode_single_ccitt3_2d_block(*bit_stream, *decoded_bits, image_width, image_height, options.use_fill_bits));
+    return decoded_bytes;
+}
+
+ErrorOr<ByteBuffer> decode_ccitt_group4(ReadonlyBytes bytes, u32 image_width, u32 image_height)
+{
+    auto strip_stream = make<FixedMemoryStream>(bytes);
+    auto bit_stream = make<BigEndianInputBitStream>(MaybeOwned<Stream>(*strip_stream));
+
+    auto output_stream = make<AllocatingMemoryStream>();
+    auto decoded_bits = make<BigEndianOutputBitStream>(MaybeOwned<Stream>(*output_stream));
+
+    // T.6 2.2.1 Principle of the coding scheme
+    // The reference line for the first coding line in a page is an imaginary white line.
+    CCITTStatus status;
+    TRY(status.current_line.try_empend(ccitt_black, image_width));
+
+    u32 i {};
+    while (!status.has_reached_eol && (image_height == 0 || i < image_height)) {
+        status = TRY(decode_single_ccitt_2d_line(*bit_stream, *decoded_bits, move(status.current_line), image_width));
+        ++i;
+    }
+
+    return output_stream->read_until_eof();
 }
 
 }

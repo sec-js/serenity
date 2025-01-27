@@ -11,6 +11,7 @@
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
+#include <LibWeb/HTML/WindowOrWorkerGlobalScope.h>
 #include <LibWeb/WebIDL/DOMException.h>
 
 namespace Web::HTML {
@@ -18,7 +19,7 @@ namespace Web::HTML {
 JS_DEFINE_ALLOCATOR(ClassicScript);
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#creating-a-classic-script
-JS::NonnullGCPtr<ClassicScript> ClassicScript::create(ByteString filename, StringView source, EnvironmentSettingsObject& environment_settings_object, AK::URL base_url, size_t source_line_number, MutedErrors muted_errors)
+JS::NonnullGCPtr<ClassicScript> ClassicScript::create(ByteString filename, StringView source, EnvironmentSettingsObject& environment_settings_object, URL::URL base_url, size_t source_line_number, MutedErrors muted_errors)
 {
     auto& vm = environment_settings_object.realm().vm();
 
@@ -56,10 +57,10 @@ JS::NonnullGCPtr<ClassicScript> ClassicScript::create(ByteString filename, Strin
     // 11. If result is a list of errors, then:
     if (result.is_error()) {
         auto& parse_error = result.error().first();
-        dbgln_if(HTML_SCRIPT_DEBUG, "ClassicScript: Failed to parse: {}", parse_error.to_byte_string());
+        dbgln_if(HTML_SCRIPT_DEBUG, "ClassicScript: Failed to parse: {}", parse_error.to_string());
 
         // 1. Set script's parse error and its error to rethrow to result[0].
-        script->set_parse_error(JS::SyntaxError::create(environment_settings_object.realm(), parse_error.to_string().release_value_but_fixme_should_propagate_errors()));
+        script->set_parse_error(JS::SyntaxError::create(environment_settings_object.realm(), parse_error.to_string()));
         script->set_error_to_rethrow(script->parse_error());
 
         // 2. Return script.
@@ -91,7 +92,7 @@ JS::Completion ClassicScript::run(RethrowErrors rethrow_errors, JS::GCPtr<JS::En
 
     // 5. If script's error to rethrow is not null, then set evaluationStatus to Completion { [[Type]]: throw, [[Value]]: script's error to rethrow, [[Target]]: empty }.
     if (!error_to_rethrow().is_null()) {
-        evaluation_status = JS::Completion { JS::Completion::Type::Throw, error_to_rethrow(), {} };
+        evaluation_status = JS::Completion { JS::Completion::Type::Throw, error_to_rethrow() };
     } else {
         auto timer = Core::ElapsedTimer::start_new();
 
@@ -120,14 +121,16 @@ JS::Completion ClassicScript::run(RethrowErrors rethrow_errors, JS::GCPtr<JS::En
             settings.clean_up_after_running_script();
 
             // 2. Throw a "NetworkError" DOMException.
-            return throw_completion(WebIDL::NetworkError::create(settings.realm(), "Script error."_fly_string));
+            return throw_completion(WebIDL::NetworkError::create(settings.realm(), "Script error."_string));
         }
 
         // 3. Otherwise, rethrow errors is false. Perform the following steps:
         VERIFY(rethrow_errors == RethrowErrors::No);
 
-        // 1. Report the exception given by evaluationStatus.[[Value]] for script.
-        report_exception(evaluation_status, settings_object().realm());
+        // 1. Report an exception given by evaluationStatus.[[Value]] for script's settings object's global object.
+        auto* window_or_worker = dynamic_cast<WindowOrWorkerGlobalScopeMixin*>(&settings.global_object());
+        VERIFY(window_or_worker);
+        window_or_worker->report_an_exception(*evaluation_status.value());
 
         // 2. Clean up after running script with settings.
         settings.clean_up_after_running_script();
@@ -147,7 +150,7 @@ JS::Completion ClassicScript::run(RethrowErrors rethrow_errors, JS::GCPtr<JS::En
     //            Return Completion { [[Type]]: throw, [[Value]]: a new "QuotaExceededError" DOMException, [[Target]]: empty }.
 }
 
-ClassicScript::ClassicScript(AK::URL base_url, ByteString filename, EnvironmentSettingsObject& environment_settings_object)
+ClassicScript::ClassicScript(URL::URL base_url, ByteString filename, EnvironmentSettingsObject& environment_settings_object)
     : Script(move(base_url), move(filename), environment_settings_object)
 {
 }

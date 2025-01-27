@@ -7,7 +7,6 @@
 #include <AK/FixedArray.h>
 #include <AK/QuickSort.h>
 #include <AK/TypedTransfer.h>
-#include <AK/URL.h>
 #include <LibConfig/Client.h>
 #include <LibConfig/Listener.h>
 #include <LibCore/Account.h>
@@ -36,6 +35,7 @@
 #include <LibGfx/Font/FontDatabase.h>
 #include <LibGfx/Palette.h>
 #include <LibMain/Main.h>
+#include <LibURL/URL.h>
 #include <LibVT/TerminalWidget.h>
 #include <pty.h>
 
@@ -65,13 +65,7 @@ public:
         VERIFY(domain == "Terminal");
 
         if (group == "Window" && key == "Bell") {
-            auto bell_mode = VT::TerminalWidget::BellMode::Visible;
-            if (value == "AudibleBeep")
-                bell_mode = VT::TerminalWidget::BellMode::AudibleBeep;
-            if (value == "Visible")
-                bell_mode = VT::TerminalWidget::BellMode::Visible;
-            if (value == "Disabled")
-                bell_mode = VT::TerminalWidget::BellMode::Disabled;
+            auto bell_mode = VT::TerminalWidget::parse_bell(value).value_or(VT::TerminalWidget::BellMode::Visible);
             m_parent_terminal.set_bell_mode(bell_mode);
         } else if (group == "Text" && key == "Font") {
             auto font = Gfx::FontDatabase::the().get_by_name(value);
@@ -83,6 +77,9 @@ public:
         } else if (group == "Cursor" && key == "Shape") {
             auto cursor_shape = VT::TerminalWidget::parse_cursor_shape(value).value_or(VT::CursorShape::Block);
             m_parent_terminal.set_cursor_shape(cursor_shape);
+        } else if (group == "Terminal" && key == "AutoMark") {
+            auto automark_mode = VT::TerminalWidget::parse_automark_mode(value).value_or(VT::TerminalWidget::AutoMarkMode::MarkInteractiveShellPrompt);
+            m_parent_terminal.set_auto_mark_mode(automark_mode);
         }
     }
 
@@ -105,7 +102,7 @@ private:
 
 static ErrorOr<void> utmp_update(StringView tty, pid_t pid, bool create)
 {
-    auto pid_string = TRY(String::number(pid));
+    auto pid_string = String::number(pid);
     Array utmp_update_command {
         "-f"sv,
         "Terminal"sv,
@@ -284,6 +281,8 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     window->set_obey_widget_min_size(false);
 
     auto terminal = window->set_main_widget<VT::TerminalWidget>(ptm_fd, true);
+    terminal->set_startup_process_id(shell_pid);
+
     terminal->on_command_exit = [&] {
         app->quit(0);
     };
@@ -307,6 +306,13 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         terminal->set_bell_mode(VT::TerminalWidget::BellMode::Disabled);
     } else {
         terminal->set_bell_mode(VT::TerminalWidget::BellMode::Visible);
+    }
+
+    auto automark = Config::read_string("Terminal"sv, "Terminal"sv, "AutoMark"sv, "MarkInteractiveShellPrompt"sv);
+    if (automark == "MarkNothing") {
+        terminal->set_auto_mark_mode(VT::TerminalWidget::AutoMarkMode::MarkNothing);
+    } else {
+        terminal->set_auto_mark_mode(VT::TerminalWidget::AutoMarkMode::MarkInteractiveShellPrompt);
     }
 
     auto cursor_shape = VT::TerminalWidget::parse_cursor_shape(Config::read_string("Terminal"sv, "Cursor"sv, "Shape"sv, "Block"sv)).value_or(VT::CursorShape::Block);
@@ -378,11 +384,13 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         return GUI::MessageBox::ExecResult::OK;
     };
 
-    file_menu->add_action(GUI::CommonActions::make_quit_action([&](auto&) {
-        dbgln("Terminal: Quit menu activated!");
-        if (check_terminal_quit() == GUI::MessageBox::ExecResult::OK)
-            GUI::Application::the()->quit();
-    }));
+    file_menu->add_action(GUI::CommonActions::make_quit_action(
+        [&](auto&) {
+            dbgln("Terminal: Quit menu activated!");
+            if (check_terminal_quit() == GUI::MessageBox::ExecResult::OK)
+                GUI::Application::the()->quit();
+        },
+        GUI::CommonActions::QuitAltShortcut::None));
 
     auto edit_menu = window->add_menu("&Edit"_string);
     edit_menu->add_action(terminal->copy_action());
@@ -399,6 +407,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         window->set_fullscreen(!window->is_fullscreen());
     }));
     view_menu->add_action(terminal->clear_including_history_action());
+    view_menu->add_action(terminal->clear_to_previous_mark_action());
 
     auto adjust_font_size = [&](float adjustment, Gfx::Font::AllowInexactSizeMatch preference) {
         auto& font = terminal->font();
@@ -443,12 +452,12 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     TRY(Core::System::unveil("/bin/utmpupdate", "x"));
     TRY(Core::System::unveil("/etc/FileIconProvider.ini", "r"));
     TRY(Core::System::unveil("/tmp/session/%sid/portal/launch", "rw"));
-    TRY(Core::System::unveil("/tmp/session/%sid/portal/config", "rw"));
+    TRY(Core::System::unveil("/dev/beep", "rw"));
     TRY(Core::System::unveil(nullptr, nullptr));
 
-    auto modified_state_check_timer = TRY(Core::Timer::create_repeating(500, [&] {
+    auto modified_state_check_timer = Core::Timer::create_repeating(500, [&] {
         window->set_modified(tty_has_foreground_process() || shell_child_process_count() > 0);
-    }));
+    });
 
     listener.on_confirm_close_changed = [&](bool confirm_close) {
         if (confirm_close) {

@@ -1,12 +1,13 @@
 set(AK_SOURCES
     Assertions.cpp
     Base64.cpp
+    ByteString.cpp
+    CPUFeatures.cpp
     CircularBuffer.cpp
     ConstrainedStream.cpp
     CountingStream.cpp
     DOSPackedTime.cpp
     DeprecatedFlyString.cpp
-    ByteString.cpp
     Error.cpp
     FloatingPointStringConversions.cpp
     FlyString.cpp
@@ -35,8 +36,6 @@ set(AK_SOURCES
     StringUtils.cpp
     StringView.cpp
     Time.cpp
-    URL.cpp
-    URLParser.cpp
     UUID.cpp
     Utf16View.cpp
     Utf32View.cpp

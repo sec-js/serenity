@@ -8,11 +8,10 @@
 
 #include <AK/Error.h>
 #include <AK/OwnPtr.h>
-#include <AK/URL.h>
 #include <LibGfx/Size.h>
 #include <LibJS/Heap/Handle.h>
+#include <LibURL/URL.h>
 #include <LibWeb/Forward.h>
-#include <LibWeb/HTML/SharedImageRequest.h>
 
 namespace Web::HTML {
 
@@ -40,8 +39,8 @@ public:
     State state() const;
     void set_state(State);
 
-    AK::URL const& current_url() const;
-    void set_current_url(JS::Realm&, AK::URL);
+    URL::URL const& current_url() const;
+    void set_current_url(JS::Realm&, URL::URL);
 
     [[nodiscard]] JS::GCPtr<DecodedImageData> image_data() const;
     void set_image_data(JS::GCPtr<DecodedImageData>);
@@ -58,7 +57,7 @@ public:
     void fetch_image(JS::Realm&, JS::NonnullGCPtr<Fetch::Infrastructure::Request>);
     void add_callbacks(Function<void()> on_finish, Function<void()> on_fail);
 
-    SharedImageRequest const* shared_image_request() const { return m_shared_image_request; }
+    JS::GCPtr<SharedResourceRequest const> shared_resource_request() const { return m_shared_resource_request; }
 
     virtual void visit_edges(JS::Cell::Visitor&) override;
 
@@ -73,7 +72,7 @@ private:
 
     // https://html.spec.whatwg.org/multipage/images.html#img-req-url
     // An image request's current URL is initially the empty string.
-    AK::URL m_current_url;
+    URL::URL m_current_url;
 
     // https://html.spec.whatwg.org/multipage/images.html#img-req-data
     JS::GCPtr<DecodedImageData> m_image_data;
@@ -87,7 +86,7 @@ private:
     // which is either a struct consisting of a width and a height or is null. It must initially be null.
     Optional<Gfx::FloatSize> m_preferred_density_corrected_dimensions;
 
-    JS::GCPtr<SharedImageRequest> m_shared_image_request;
+    JS::GCPtr<SharedResourceRequest> m_shared_resource_request;
 };
 
 // https://html.spec.whatwg.org/multipage/images.html#abort-the-image-request

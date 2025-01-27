@@ -11,6 +11,7 @@
 #include <AK/StdLibExtras.h>
 #include <AK/Types.h>
 #include <Kernel/API/SyscallString.h>
+#include <Kernel/API/prctl_numbers.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
 #include <LibCore/System.h>
@@ -210,6 +211,18 @@ HANDLE(CLOCK_REALTIME_COARSE)
 HANDLE(CLOCK_MONOTONIC_COARSE)
 END_VALUES_TO_NAMES()
 
+VALUES_TO_NAMES(prctl_option_name)
+HANDLE(PR_SET_DUMPABLE)
+HANDLE(PR_GET_DUMPABLE)
+HANDLE(PR_SET_NO_NEW_SYSCALL_REGION_ANNOTATIONS)
+HANDLE(PR_GET_NO_NEW_SYSCALL_REGION_ANNOTATIONS)
+HANDLE(PR_SET_COREDUMP_METADATA_VALUE)
+HANDLE(PR_SET_PROCESS_NAME)
+HANDLE(PR_GET_PROCESS_NAME)
+HANDLE(PR_SET_THREAD_NAME)
+HANDLE(PR_GET_THREAD_NAME)
+END_VALUES_TO_NAMES()
+
 static int g_pid = -1;
 
 using syscall_arg_t = u64;
@@ -290,7 +303,7 @@ struct Formatter<BitflagDerivative> : StandardFormatter {
             // No more BitflagOptions are available. Any remaining flags are unrecognized.
             if (had_any_output)
                 TRY(format_builder.put_literal(" | "sv));
-            format_builder.builder().appendff("0x{:x} (?)", static_cast<unsigned>(remaining));
+            format_builder.builder().appendff("{:#x} (?)", static_cast<unsigned>(remaining));
             had_any_output = true;
         }
 
@@ -701,7 +714,34 @@ static void format_dbgputstr(FormattedSyscallBuilder& builder, char* characters,
     builder.add_argument(StringArgument { { characters, size }, "\0\n"sv });
 }
 
-static ErrorOr<void> format_syscall(FormattedSyscallBuilder& builder, Syscall::Function syscall_function, syscall_arg_t arg1, syscall_arg_t arg2, syscall_arg_t arg3, syscall_arg_t res)
+static void format_kill(FormattedSyscallBuilder& builder, pid_t pid_or_pgid, int signal)
+{
+    builder.add_argument(pid_or_pgid);
+    auto* signal_name = getsignalname(signal);
+    if (signal_name)
+        builder.add_argument(signal_name);
+    else
+        builder.add_argument(signal);
+}
+
+static void format_prctl(FormattedSyscallBuilder& builder, int option, size_t arg1, size_t arg2, size_t arg3)
+{
+    builder.add_argument(prctl_option_name(option));
+    switch (option) {
+    case PR_SET_DUMPABLE:
+    case PR_SET_NO_NEW_SYSCALL_REGION_ANNOTATIONS:
+        builder.add_argument((bool)arg1);
+        break;
+    case PR_GET_DUMPABLE:
+    case PR_GET_NO_NEW_SYSCALL_REGION_ANNOTATIONS:
+        break;
+    default:
+        builder.add_arguments(arg1, arg2, arg3);
+        break;
+    }
+}
+
+static ErrorOr<void> format_syscall(FormattedSyscallBuilder& builder, Syscall::Function syscall_function, syscall_arg_t arg1, syscall_arg_t arg2, syscall_arg_t arg3, syscall_arg_t arg4, syscall_arg_t res)
 {
     enum ResultType {
         Int,
@@ -788,6 +828,12 @@ static ErrorOr<void> format_syscall(FormattedSyscallBuilder& builder, Syscall::F
         format_write(builder, (int)arg1, (void*)arg2, (size_t)arg3);
         result_type = Ssize;
         break;
+    case SC_kill:
+        format_kill(builder, (pid_t)arg1, (int)arg2);
+        break;
+    case SC_prctl:
+        format_prctl(builder, (int)arg1, (size_t)arg2, (size_t)arg3, (size_t)arg4);
+        break;
     case SC_getuid:
     case SC_geteuid:
     case SC_getgid:
@@ -797,7 +843,7 @@ static ErrorOr<void> format_syscall(FormattedSyscallBuilder& builder, Syscall::F
     case SC_gettid:
         break;
     default:
-        builder.add_arguments((void*)arg1, (void*)arg2, (void*)arg3);
+        builder.add_arguments((void*)arg1, (void*)arg2, (void*)arg3, (void*)arg4);
         result_type = VoidP;
     }
 
@@ -899,19 +945,22 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 #if ARCH(X86_64)
         syscall_arg_t syscall_index = regs.rax;
         syscall_arg_t arg1 = regs.rdx;
-        syscall_arg_t arg2 = regs.rcx;
+        syscall_arg_t arg2 = regs.rdi;
         syscall_arg_t arg3 = regs.rbx;
+        syscall_arg_t arg4 = regs.rsi;
 #elif ARCH(AARCH64)
         syscall_arg_t syscall_index = 0; // FIXME
         syscall_arg_t arg1 = 0;          // FIXME
         syscall_arg_t arg2 = 0;          // FIXME
         syscall_arg_t arg3 = 0;          // FIXME
+        syscall_arg_t arg4 = 0;          // FIXME
         TODO_AARCH64();
 #elif ARCH(RISCV64)
         syscall_arg_t syscall_index = 0; // FIXME
         syscall_arg_t arg1 = 0;          // FIXME
         syscall_arg_t arg2 = 0;          // FIXME
         syscall_arg_t arg3 = 0;          // FIXME
+        syscall_arg_t arg4 = 0;          // FIXME
         TODO_RISCV64();
 #else
 #    error Unknown architecture
@@ -945,7 +994,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
             continue;
 
         FormattedSyscallBuilder builder(syscall_name);
-        TRY(format_syscall(builder, syscall_function, arg1, arg2, arg3, res));
+        TRY(format_syscall(builder, syscall_function, arg1, arg2, arg3, arg4, res));
 
         TRY(trace_file->write_until_depleted(builder.string_view().bytes()));
     }

@@ -11,13 +11,12 @@
 #include "Compiler/Passes/CFGBuildingPass.h"
 #include "Compiler/Passes/CFGSimplificationPass.h"
 #include "Compiler/Passes/DeadCodeEliminationPass.h"
-#include "Compiler/Passes/FunctionCallCanonicalizationPass.h"
 #include "Compiler/Passes/IfBranchMergingPass.h"
 #include "Compiler/Passes/ReferenceResolvingPass.h"
 #include "Compiler/Passes/SSABuildingPass.h"
 #include "Function.h"
 #include "Parser/CppASTConverter.h"
-#include "Parser/SpecParser.h"
+#include "Parser/SpecificationParsing.h"
 
 using namespace JSSpecCompiler;
 
@@ -72,14 +71,20 @@ private:
 };
 
 template<>
-struct AK::Formatter<Vector<FunctionArgument>> : AK::Formatter<StringView> {
-    ErrorOr<void> format(FormatBuilder& builder, Vector<FunctionArgument> const& arguments)
+struct AK::Formatter<ReadonlySpan<FunctionArgument>> : AK::Formatter<StringView> {
+    ErrorOr<void> format(FormatBuilder& builder, ReadonlySpan<FunctionArgument> const& arguments)
     {
+        size_t previous_optional_group = 0;
         for (size_t i = 0; i < arguments.size(); ++i) {
+            if (previous_optional_group != arguments[i].optional_arguments_group) {
+                previous_optional_group = arguments[i].optional_arguments_group;
+                TRY(builder.put_string("["sv));
+            }
             TRY(builder.put_string(arguments[i].name));
             if (i + 1 != arguments.size())
                 TRY(builder.put_literal(", "sv));
         }
+        TRY(builder.put_string(TRY(String::repeated(']', previous_optional_group))));
         return {};
     }
 };
@@ -111,14 +116,16 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     StringView passes_to_dump_cfg;
     args_parser.add_option(passes_to_dump_cfg, "Dump CFG after specified passes.", "dump-cfg", 0, "{all|last|<pass-name>|-<pass-name>[,...]}");
 
+    bool silence_diagnostics = false;
+    args_parser.add_option(silence_diagnostics, "Silence all diagnostics.", "silence-diagnostics");
+
     args_parser.parse(arguments);
 
     CompilationPipeline pipeline;
     if (language == language_cpp)
         pipeline.add_step(adopt_own_if_nonnull(new CppParsingStep()));
     else
-        pipeline.add_step(adopt_own_if_nonnull(new SpecParsingStep()));
-    pipeline.add_compilation_pass<FunctionCallCanonicalizationPass>();
+        pipeline.add_step(adopt_own_if_nonnull(new SpecificationParsingStep()));
     pipeline.add_compilation_pass<IfBranchMergingPass>();
     pipeline.add_compilation_pass<ReferenceResolvingPass>();
     pipeline.add_compilation_pass<CFGBuildingPass>();
@@ -135,17 +142,6 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 
     TranslationUnit translation_unit(filename);
 
-    // Functions referenced in DifferenceISODate
-    // TODO: This is here just for testing. In a long run, we need some place, which is not
-    //       `serenity_main`, to store built-in functions.
-    translation_unit.adopt_declaration(make_ref_counted<FunctionDeclaration>("CompareISODate"sv, Vector<FunctionArgument> {}));
-    translation_unit.adopt_declaration(make_ref_counted<FunctionDeclaration>("CreateDateDurationRecord"sv, Vector<FunctionArgument> {}));
-    translation_unit.adopt_declaration(make_ref_counted<FunctionDeclaration>("AddISODate"sv, Vector<FunctionArgument> {}));
-    translation_unit.adopt_declaration(make_ref_counted<FunctionDeclaration>("ISODaysInMonth"sv, Vector<FunctionArgument> {}));
-    translation_unit.adopt_declaration(make_ref_counted<FunctionDeclaration>("ISODateToEpochDays"sv, Vector<FunctionArgument> {}));
-    translation_unit.adopt_declaration(make_ref_counted<FunctionDeclaration>("truncate"sv, Vector<FunctionArgument> {}));
-    translation_unit.adopt_declaration(make_ref_counted<FunctionDeclaration>("remainder"sv, Vector<FunctionArgument> {}));
-
     for (auto const& step : pipeline.pipeline()) {
         step.step->run(&translation_unit);
 
@@ -157,20 +153,21 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         if (step.dump_ast) {
             outln(stderr, "===== AST after {} =====", step.step->name());
             for (auto const& function : translation_unit.functions_to_compile()) {
-                outln(stderr, "{}({}):", function->m_name, function->m_arguments);
+                outln(stderr, "{}({}):", function->name(), function->arguments());
                 outln(stderr, "{}", function->m_ast);
             }
         }
         if (step.dump_cfg && translation_unit.functions_to_compile().size() && translation_unit.functions_to_compile()[0]->m_cfg != nullptr) {
             outln(stderr, "===== CFG after {} =====", step.step->name());
             for (auto const& function : translation_unit.functions_to_compile()) {
-                outln(stderr, "{}({}):", function->m_name, function->m_arguments);
+                outln(stderr, "{}({}):", function->name(), function->arguments());
                 outln(stderr, "{}", *function->m_cfg);
             }
         }
     }
 
-    translation_unit.diag().print_diagnostics();
+    if (!silence_diagnostics)
+        translation_unit.diag().print_diagnostics();
 
     return 0;
 }

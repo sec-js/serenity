@@ -11,6 +11,8 @@
 #include <LibGfx/ImageFormats/ICOLoader.h>
 #include <LibGfx/ImageFormats/ILBMLoader.h>
 #include <LibGfx/ImageFormats/ImageDecoder.h>
+#include <LibGfx/ImageFormats/JBIG2Loader.h>
+#include <LibGfx/ImageFormats/JPEG2000Loader.h>
 #include <LibGfx/ImageFormats/JPEGLoader.h>
 #include <LibGfx/ImageFormats/JPEGXLLoader.h>
 #include <LibGfx/ImageFormats/PAMLoader.h>
@@ -26,7 +28,7 @@
 
 namespace Gfx {
 
-static OwnPtr<ImageDecoderPlugin> probe_and_sniff_for_appropriate_plugin(ReadonlyBytes bytes)
+static ErrorOr<OwnPtr<ImageDecoderPlugin>> probe_and_sniff_for_appropriate_plugin(ReadonlyBytes bytes)
 {
     struct ImagePluginInitializer {
         bool (*sniff)(ReadonlyBytes) = nullptr;
@@ -39,6 +41,8 @@ static OwnPtr<ImageDecoderPlugin> probe_and_sniff_for_appropriate_plugin(Readonl
         { GIFImageDecoderPlugin::sniff, GIFImageDecoderPlugin::create },
         { ICOImageDecoderPlugin::sniff, ICOImageDecoderPlugin::create },
         { ILBMImageDecoderPlugin::sniff, ILBMImageDecoderPlugin::create },
+        { JBIG2ImageDecoderPlugin::sniff, JBIG2ImageDecoderPlugin::create },
+        { JPEG2000ImageDecoderPlugin::sniff, JPEG2000ImageDecoderPlugin::create },
         { JPEGImageDecoderPlugin::sniff, JPEGImageDecoderPlugin::create },
         { JPEGXLImageDecoderPlugin::sniff, JPEGXLImageDecoderPlugin::create },
         { PAMImageDecoderPlugin::sniff, PAMImageDecoderPlugin::create },
@@ -56,17 +60,15 @@ static OwnPtr<ImageDecoderPlugin> probe_and_sniff_for_appropriate_plugin(Readonl
         auto sniff_result = plugin.sniff(bytes);
         if (!sniff_result)
             continue;
-        auto plugin_decoder = plugin.create(bytes);
-        if (!plugin_decoder.is_error())
-            return plugin_decoder.release_value();
+        return TRY(plugin.create(bytes));
     }
-    return {};
+    return OwnPtr<ImageDecoderPlugin> {};
 }
 
-static OwnPtr<ImageDecoderPlugin> probe_and_sniff_for_appropriate_plugin_with_known_mime_type(StringView mime_type, ReadonlyBytes bytes)
+static ErrorOr<OwnPtr<ImageDecoderPlugin>> probe_and_sniff_for_appropriate_plugin_with_known_mime_type(StringView mime_type, ReadonlyBytes bytes)
 {
     struct ImagePluginWithMIMETypeInitializer {
-        ErrorOr<bool> (*validate_before_create)(ReadonlyBytes) = nullptr;
+        bool (*validate_before_create)(ReadonlyBytes) = nullptr;
         ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> (*create)(ReadonlyBytes) = nullptr;
         StringView mime_type;
     };
@@ -78,27 +80,25 @@ static OwnPtr<ImageDecoderPlugin> probe_and_sniff_for_appropriate_plugin_with_kn
     for (auto& plugin : s_initializers_with_mime_type) {
         if (plugin.mime_type != mime_type)
             continue;
-        auto validation_result = plugin.validate_before_create(bytes).release_value_but_fixme_should_propagate_errors();
+        auto validation_result = plugin.validate_before_create(bytes);
         if (!validation_result)
             continue;
-        auto plugin_decoder = plugin.create(bytes);
-        if (!plugin_decoder.is_error())
-            return plugin_decoder.release_value();
+        return TRY(plugin.create(bytes));
     }
-    return {};
+    return OwnPtr<ImageDecoderPlugin> {};
 }
 
-RefPtr<ImageDecoder> ImageDecoder::try_create_for_raw_bytes(ReadonlyBytes bytes, Optional<ByteString> mime_type)
+ErrorOr<RefPtr<ImageDecoder>> ImageDecoder::try_create_for_raw_bytes(ReadonlyBytes bytes, Optional<ByteString> mime_type)
 {
-    if (OwnPtr<ImageDecoderPlugin> plugin = probe_and_sniff_for_appropriate_plugin(bytes); plugin)
+    if (auto plugin = TRY(probe_and_sniff_for_appropriate_plugin(bytes)); plugin)
         return adopt_ref_if_nonnull(new (nothrow) ImageDecoder(plugin.release_nonnull()));
 
     if (mime_type.has_value()) {
-        if (OwnPtr<ImageDecoderPlugin> plugin = probe_and_sniff_for_appropriate_plugin_with_known_mime_type(mime_type.value(), bytes); plugin)
+        if (OwnPtr<ImageDecoderPlugin> plugin = TRY(probe_and_sniff_for_appropriate_plugin_with_known_mime_type(mime_type.value(), bytes)); plugin)
             return adopt_ref_if_nonnull(new (nothrow) ImageDecoder(plugin.release_nonnull()));
     }
 
-    return {};
+    return RefPtr<ImageDecoder> {};
 }
 
 ImageDecoder::ImageDecoder(NonnullOwnPtr<ImageDecoderPlugin> plugin)

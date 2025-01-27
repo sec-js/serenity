@@ -10,6 +10,7 @@
 #include <LibWebView/InspectorClient.h>
 #include <QAction>
 #include <QCloseEvent>
+#include <QGuiApplication>
 #include <QMenu>
 #include <QVBoxLayout>
 #include <QWindow>
@@ -21,7 +22,7 @@ extern bool is_using_dark_system_theme(QWidget&);
 InspectorWidget::InspectorWidget(QWidget* tab, WebContentView& content_view)
     : QWidget(tab, Qt::Window)
 {
-    m_inspector_view = new WebContentView({}, {});
+    m_inspector_view = new WebContentView(this, content_view.web_content_options(), {});
 
     if (is_using_dark_system_theme(*this))
         m_inspector_view->update_palette(WebContentView::PaletteMode::Dark);
@@ -96,14 +97,14 @@ InspectorWidget::InspectorWidget(QWidget* tab, WebContentView& content_view)
         m_edit_node_action->setText("&Edit text");
         m_copy_node_action->setText("&Copy text");
 
-        m_dom_node_text_context_menu->exec(to_widget_position(position));
+        m_dom_node_text_context_menu->exec(m_inspector_view->map_point_to_global_position(position));
     };
 
     m_inspector_client->on_requested_dom_node_tag_context_menu = [this](auto position, auto const& tag) {
         m_edit_node_action->setText(qstring_from_ak_string(MUST(String::formatted("&Edit \"{}\"", tag))));
         m_copy_node_action->setText("&Copy HTML");
 
-        m_dom_node_tag_context_menu->exec(to_widget_position(position));
+        m_dom_node_tag_context_menu->exec(m_inspector_view->map_point_to_global_position(position));
     };
 
     m_inspector_client->on_requested_dom_node_attribute_context_menu = [this](auto position, auto const&, WebView::Attribute const& attribute) {
@@ -116,7 +117,7 @@ InspectorWidget::InspectorWidget(QWidget* tab, WebContentView& content_view)
             attribute.value, MAX_ATTRIBUTE_VALUE_LENGTH,
             attribute.value.bytes_as_string_view().length() > MAX_ATTRIBUTE_VALUE_LENGTH ? "..."sv : ""sv))));
 
-        m_dom_node_attribute_context_menu->exec(to_widget_position(position));
+        m_dom_node_attribute_context_menu->exec(m_inspector_view->map_point_to_global_position(position));
     };
 
     setLayout(new QVBoxLayout);
@@ -126,20 +127,22 @@ InspectorWidget::InspectorWidget(QWidget* tab, WebContentView& content_view)
     resize(875, 825);
 
     // Listen for DPI changes
-    setAttribute(Qt::WA_NativeWindow);
-    setAttribute(Qt::WA_DontCreateNativeAncestors);
     m_device_pixel_ratio = devicePixelRatio();
     m_current_screen = screen();
-    QObject::connect(m_current_screen, &QScreen::logicalDotsPerInchChanged, this, &InspectorWidget::device_pixel_ratio_changed);
-    QObject::connect(windowHandle(), &QWindow::screenChanged, this, [this](QScreen* screen) {
-        if (m_device_pixel_ratio != screen->devicePixelRatio())
-            device_pixel_ratio_changed(screen->devicePixelRatio());
-
-        // Listen for logicalDotsPerInchChanged signals on new screen
-        QObject::disconnect(m_current_screen, &QScreen::logicalDotsPerInchChanged, nullptr, nullptr);
-        m_current_screen = screen;
+    if (QT_VERSION < QT_VERSION_CHECK(6, 6, 0) || QGuiApplication::platformName() != "wayland") {
+        setAttribute(Qt::WA_NativeWindow);
+        setAttribute(Qt::WA_DontCreateNativeAncestors);
         QObject::connect(m_current_screen, &QScreen::logicalDotsPerInchChanged, this, &InspectorWidget::device_pixel_ratio_changed);
-    });
+        QObject::connect(windowHandle(), &QWindow::screenChanged, this, [this](QScreen* screen) {
+            if (m_device_pixel_ratio != screen->devicePixelRatio())
+                device_pixel_ratio_changed(screen->devicePixelRatio());
+
+            // Listen for logicalDotsPerInchChanged signals on new screen
+            QObject::disconnect(m_current_screen, &QScreen::logicalDotsPerInchChanged, nullptr, nullptr);
+            m_current_screen = screen;
+            QObject::connect(m_current_screen, &QScreen::logicalDotsPerInchChanged, this, &InspectorWidget::device_pixel_ratio_changed);
+        });
+    }
 }
 
 InspectorWidget::~InspectorWidget() = default;
@@ -170,16 +173,22 @@ void InspectorWidget::device_pixel_ratio_changed(qreal dpi)
     m_inspector_view->set_device_pixel_ratio(m_device_pixel_ratio);
 }
 
+bool InspectorWidget::event(QEvent* event)
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+    if (event->type() == QEvent::DevicePixelRatioChange) {
+        if (m_device_pixel_ratio != devicePixelRatio())
+            device_pixel_ratio_changed(devicePixelRatio());
+    }
+#endif
+
+    return QWidget::event(event);
+}
+
 void InspectorWidget::closeEvent(QCloseEvent* event)
 {
     event->accept();
     m_inspector_client->clear_selection();
-}
-
-QPoint InspectorWidget::to_widget_position(Gfx::IntPoint position) const
-{
-    auto widget_position = m_inspector_view->mapTo(this, QPoint { position.x(), position.y() });
-    return mapToGlobal(widget_position);
 }
 
 }

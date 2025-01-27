@@ -22,6 +22,7 @@
     X(BaseFont)                   \
     X(BitsPerComponent)           \
     X(BitsPerSample)              \
+    X(BlackIs1)                   \
     X(BlackPoint)                 \
     X(Bounds)                     \
     X(C)                          \
@@ -32,6 +33,7 @@
     X(CF)                         \
     X(CFM)                        \
     X(CIDFontType0)               \
+    X(CIDFontType0C)              \
     X(CIDFontType2)               \
     X(CIDSystemInfo)              \
     X(CIDToGIDMap)                \
@@ -50,6 +52,8 @@
     X(D)                          \
     X(DCTDecode)                  \
     X(DW)                         \
+    X(DW2)                        \
+    X(DamagedRowsBeforeError)     \
     X(Decode)                     \
     X(DecodeParms)                \
     X(DescendantFonts)            \
@@ -64,9 +68,12 @@
     X(E)                          \
     X(EarlyChange)                \
     X(Encode)                     \
+    X(EncodedByteAlign)           \
     X(Encoding)                   \
     X(Encrypt)                    \
     X(EncryptMetadata)            \
+    X(EndOfBlock)                 \
+    X(EndOfLine)                  \
     X(ExtGState)                  \
     X(F)                          \
     X(FL)                         \
@@ -80,6 +87,7 @@
     X(FitH)                       \
     X(FitR)                       \
     X(FitV)                       \
+    X(Flags)                      \
     X(FlateDecode)                \
     X(Font)                       \
     X(FontDescriptor)             \
@@ -104,7 +112,9 @@
     X(Info)                       \
     X(Intent)                     \
     X(JBIG2Decode)                \
+    X(JBIG2Globals)               \
     X(JPXDecode)                  \
+    X(K)                          \
     X(Keywords)                   \
     X(Kids)                       \
     X(L)                          \
@@ -151,6 +161,7 @@
     X(Registry)                   \
     X(Resources)                  \
     X(Root)                       \
+    X(Rows)                       \
     X(Rotate)                     \
     X(RunLengthDecode)            \
     X(S)                          \
@@ -179,6 +190,7 @@
     X(UserUnit)                   \
     X(V)                          \
     X(W)                          \
+    X(W2)                         \
     X(WhitePoint)                 \
     X(Width)                      \
     X(Widths)                     \
@@ -195,7 +207,9 @@ public:
     ENUMERATE_COMMON_NAMES(ENUMERATE)
 #undef ENUMERATE
 
+    // Special cases where the string value isn't identical to the name.
     static DeprecatedFlyString IdentityH;
+    static DeprecatedFlyString IdentityV;
 };
 
 }

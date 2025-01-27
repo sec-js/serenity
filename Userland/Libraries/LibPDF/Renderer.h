@@ -37,8 +37,8 @@ enum class LineJoinStyle : u8 {
 };
 
 struct LineDashPattern {
-    Vector<int> pattern;
-    int phase;
+    Vector<float> pattern;
+    float phase;
 };
 
 enum class TextRenderingMode : u8 {
@@ -89,6 +89,8 @@ struct GraphicsState {
 struct RenderingPreferences {
     bool show_clipping_paths { false };
     bool show_images { true };
+    bool show_hidden_text { false };
+    bool show_diagnostics { false };
 
     bool clip_images { true };
     bool clip_paths { true };
@@ -104,6 +106,8 @@ class Renderer {
 public:
     static PDFErrorsOr<void> render(Document&, Page const&, RefPtr<Gfx::Bitmap>, Color background_color, RenderingPreferences preferences);
 
+    static ErrorOr<NonnullRefPtr<Gfx::Bitmap>> apply_page_rotation(NonnullRefPtr<Gfx::Bitmap>, Page const&, int extra_degrees = 0);
+
     struct FontCacheKey {
         NonnullRefPtr<DictObject> font_dictionary;
         float font_size;
@@ -117,6 +121,8 @@ public:
     Gfx::AffineTransform const& calculate_text_rendering_matrix() const;
 
     PDFErrorOr<void> render_type3_glyph(Gfx::FloatPoint, StreamObject const&, Gfx::AffineTransform const&, Optional<NonnullRefPtr<DictObject>>);
+
+    bool show_hidden_text() const { return m_rendering_preferences.show_hidden_text; }
 
 private:
     Renderer(RefPtr<Document>, Page const&, RefPtr<Gfx::Bitmap>, Color background_color, RenderingPreferences);
@@ -156,9 +162,9 @@ private:
         bool is_image_mask = false;
     };
     PDFErrorOr<LoadedImage> load_image(NonnullRefPtr<StreamObject>);
-
+    PDFErrorOr<NonnullRefPtr<Gfx::Bitmap>> make_mask_bitmap_from_array(NonnullRefPtr<ArrayObject>, NonnullRefPtr<StreamObject>);
     PDFErrorOr<void> show_image(NonnullRefPtr<StreamObject>);
-    void show_empty_image(int width, int height);
+    void show_empty_image(Gfx::IntSize);
     PDFErrorOr<NonnullRefPtr<ColorSpace>> get_color_space_from_resources(Value const&, NonnullRefPtr<DictObject>);
     PDFErrorOr<NonnullRefPtr<ColorSpace>> get_color_space_from_document(NonnullRefPtr<Object>);
 
@@ -176,7 +182,12 @@ private:
 
     Gfx::Path map(Gfx::Path const&) const;
 
-    Gfx::AffineTransform calculate_image_space_transformation(int width, int height);
+    float line_width() const;
+    Gfx::Path::CapStyle line_cap_style() const;
+    Gfx::Path::JoinStyle line_join_style() const;
+    Gfx::Path::StrokeStyle stroke_style() const;
+
+    Gfx::AffineTransform calculate_image_space_transformation(Gfx::IntSize);
 
     PDFErrorOr<NonnullRefPtr<PDFFont>> get_font(FontCacheKey const&);
 

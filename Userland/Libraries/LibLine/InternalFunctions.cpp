@@ -15,10 +15,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-namespace {
-constexpr u32 ctrl(char c) { return c & 0x3f; }
-}
-
 namespace Line {
 
 Function<bool(Editor&)> Editor::find_internal_function(StringView name)
@@ -367,7 +363,7 @@ void Editor::enter_search()
 
         // ^L - This is a source of issues, as the search editor refreshes first,
         // and we end up with the wrong order of prompts, so we will first refresh
-        // ourselves, then refresh the search editor, and then tell him not to process
+        // ourselves, then refresh the search editor, and then tell it not to process
         // this event.
         m_search_editor->register_key_input_callback(ctrl('L'), [this](auto& search_editor) {
             fprintf(stderr, "\033[3J\033[H\033[2J"); // Clear screen.
@@ -447,6 +443,69 @@ void Editor::enter_search()
         // Return the string,
         finish();
     }
+}
+
+namespace {
+Optional<u32> read_unicode_char()
+{
+    // FIXME: It would be ideal to somehow communicate that the line editor is
+    // not operating in a normal mode and expects a character during the unicode
+    // read (cursor mode? change current cell? change prompt? Something else?)
+    StringBuilder builder;
+
+    for (int i = 0; i < 4; ++i) {
+        char c = 0;
+        auto nread = read(0, &c, 1);
+
+        if (nread <= 0)
+            return {};
+
+        builder.append(c);
+
+        Utf8View search_char_utf8_view { builder.string_view() };
+
+        if (search_char_utf8_view.validate())
+            return *search_char_utf8_view.begin();
+    }
+
+    return {};
+}
+}
+
+void Editor::search_character_forwards()
+{
+    auto optional_search_char = read_unicode_char();
+    if (not optional_search_char.has_value())
+        return;
+    u32 search_char = optional_search_char.value();
+
+    for (auto index = m_cursor + 1; index < m_buffer.size(); ++index) {
+        if (m_buffer[index] == search_char) {
+            m_cursor = index;
+            return;
+        }
+    }
+
+    fputc('\a', stderr);
+    fflush(stderr);
+}
+
+void Editor::search_character_backwards()
+{
+    auto optional_search_char = read_unicode_char();
+    if (not optional_search_char.has_value())
+        return;
+    u32 search_char = optional_search_char.value();
+
+    for (auto index = m_cursor; index > 0; --index) {
+        if (m_buffer[index - 1] == search_char) {
+            m_cursor = index - 1;
+            return;
+        }
+    }
+
+    fputc('\a', stderr);
+    fflush(stderr);
 }
 
 void Editor::transpose_words()
@@ -576,6 +635,23 @@ void Editor::erase_alnum_word_forwards()
 
         m_last_erased.append(m_buffer[m_cursor]);
         erase_character_forwards();
+    }
+}
+
+void Editor::erase_spaces()
+{
+    while (m_cursor < m_buffer.size()) {
+        if (is_ascii_space(m_buffer[m_cursor]))
+            erase_character_forwards();
+        else
+            break;
+    }
+
+    while (m_cursor > 0) {
+        if (is_ascii_space(m_buffer[m_cursor - 1]))
+            erase_character_backwards();
+        else
+            break;
     }
 }
 

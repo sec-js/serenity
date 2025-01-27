@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/SVGScriptElementPrototype.h>
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
 #include <LibWeb/Namespace.h>
 #include <LibWeb/SVG/AttributeNames.h>
@@ -21,12 +22,13 @@ SVGScriptElement::SVGScriptElement(DOM::Document& document, DOM::QualifiedName q
 void SVGScriptElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::SVGScriptElementPrototype>(realm, "SVGScriptElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(SVGScriptElement);
 }
 
 void SVGScriptElement::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
+    SVGURIReferenceMixin::visit_edges(visitor);
     visitor.visit(m_script);
 }
 

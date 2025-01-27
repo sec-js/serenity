@@ -17,10 +17,10 @@
 #include <LibGfx/ICC/Tags.h>
 #include <LibGfx/ICC/WellKnownProfiles.h>
 #include <LibGfx/ImageFormats/ImageDecoder.h>
-#include <LibVideo/Color/CodingIndependentCodePoints.h>
+#include <LibMedia/Color/CodingIndependentCodePoints.h>
 
 template<class T>
-static ErrorOr<String> hyperlink(URL const& target, T const& label)
+static ErrorOr<String> hyperlink(URL::URL const& target, T const& label)
 {
     return String::formatted("\033]8;;{}\033\\{}\033]8;;\033\\", target, label);
 }
@@ -244,13 +244,13 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     args_parser.add_option(reencode_out_path, "Reencode ICC profile to this path", "reencode-to", 0, "FILE");
 
     bool debug_roundtrip = false;
-    args_parser.add_option(debug_roundtrip, "Check how many u8 colors roundtrip losslessly through the profile. For debugging.", "debug-roundtrip", 0);
+    args_parser.add_option(debug_roundtrip, "Check how many u8 colors roundtrip losslessly through the profile. For debugging.", "debug-roundtrip");
 
     bool measure = false;
-    args_parser.add_option(measure, "For RGB ICC profiles, print perceptually smallest and largest color step", "measure", 0);
+    args_parser.add_option(measure, "For RGB ICC profiles, print perceptually smallest and largest color step", "measure");
 
     bool force_print = false;
-    args_parser.add_option(force_print, "Print profile even when writing ICC files", "print", 0);
+    args_parser.add_option(force_print, "Print profile even when writing ICC files", "print");
 
     args_parser.parse(arguments);
 
@@ -276,7 +276,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         }
         auto file = TRY(Core::MappedFile::map(path));
 
-        auto decoder = Gfx::ImageDecoder::try_create_for_raw_bytes(file->bytes());
+        auto decoder = TRY(Gfx::ImageDecoder::try_create_for_raw_bytes(file->bytes()));
         if (decoder) {
             if (auto embedded_icc_bytes = TRY(decoder->icc_data()); embedded_icc_bytes.has_value()) {
                 icc_bytes = *embedded_icc_bytes;
@@ -324,17 +324,26 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     outln("          device class: {}", Gfx::ICC::device_class_name(profile->device_class()));
     outln("      data color space: {}", Gfx::ICC::data_color_space_name(profile->data_color_space()));
     outln("      connection space: {}", Gfx::ICC::profile_connection_space_name(profile->connection_space()));
-    outln("creation date and time: {}", Core::DateTime::from_timestamp(profile->creation_timestamp()));
+
+    if (auto time = profile->creation_timestamp().to_time_t(); !time.is_error()) {
+        // Print in friendly localtime for valid profiles.
+        outln("creation date and time: {}", Core::DateTime::from_timestamp(time.release_value()));
+    } else {
+        outln("creation date and time: {:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC (invalid)",
+            profile->creation_timestamp().year, profile->creation_timestamp().month, profile->creation_timestamp().day,
+            profile->creation_timestamp().hours, profile->creation_timestamp().minutes, profile->creation_timestamp().seconds);
+    }
+
     out_optional("      primary platform", profile->primary_platform().map([](auto platform) { return primary_platform_name(platform); }));
 
     auto flags = profile->flags();
-    outln("                 flags: 0x{:08x}", flags.bits());
+    outln("                 flags: {:#08x}", flags.bits());
     outln("                        - {}embedded in file", flags.is_embedded_in_file() ? "" : "not ");
     outln("                        - can{} be used independently of embedded color data", flags.can_be_used_independently_of_embedded_color_data() ? "" : "not");
     if (auto unknown_icc_bits = flags.icc_bits() & ~Gfx::ICC::Flags::KnownBitsMask)
-        outln("                        other unknown ICC bits: 0x{:04x}", unknown_icc_bits);
+        outln("                        other unknown ICC bits: {:#04x}", unknown_icc_bits);
     if (auto color_management_module_bits = flags.color_management_module_bits())
-        outln("                            CMM bits: 0x{:04x}", color_management_module_bits);
+        outln("                            CMM bits: {:#04x}", color_management_module_bits);
 
     out_optional("   device manufacturer", TRY(profile->device_manufacturer().map([](auto device_manufacturer) {
         return hyperlink(device_manufacturer_url(device_manufacturer), device_manufacturer);
@@ -344,7 +353,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     })));
 
     auto device_attributes = profile->device_attributes();
-    outln("     device attributes: 0x{:016x}", device_attributes.bits());
+    outln("     device attributes: {:#016x}", device_attributes.bits());
     outln("                        media is:");
     outln("                        - {}",
         device_attributes.media_reflectivity() == Gfx::ICC::DeviceAttributes::MediaReflectivity::Reflective ? "reflective" : "transparent");
@@ -356,7 +365,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         device_attributes.media_color() == Gfx::ICC::DeviceAttributes::MediaColor::Colored ? "colored" : "black and white");
     VERIFY((flags.icc_bits() & ~Gfx::ICC::DeviceAttributes::KnownBitsMask) == 0);
     if (auto vendor_bits = device_attributes.vendor_bits())
-        outln("                        vendor bits: 0x{:08x}", vendor_bits);
+        outln("                        vendor bits: {:#08x}", vendor_bits);
 
     outln("      rendering intent: {}", Gfx::ICC::rendering_intent_name(profile->rendering_intent()));
     outln("        pcs illuminant: {}", profile->pcs_illuminant());
@@ -397,13 +406,13 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         } else if (tag_data->type() == Gfx::ICC::CicpTagData::Type) {
             auto& cicp = static_cast<Gfx::ICC::CicpTagData&>(*tag_data);
             outln("    color primaries: {} - {}", cicp.color_primaries(),
-                Video::color_primaries_to_string((Video::ColorPrimaries)cicp.color_primaries()));
+                Media::color_primaries_to_string((Media::ColorPrimaries)cicp.color_primaries()));
             outln("    transfer characteristics: {} - {}", cicp.transfer_characteristics(),
-                Video::transfer_characteristics_to_string((Video::TransferCharacteristics)cicp.transfer_characteristics()));
+                Media::transfer_characteristics_to_string((Media::TransferCharacteristics)cicp.transfer_characteristics()));
             outln("    matrix coefficients: {} - {}", cicp.matrix_coefficients(),
-                Video::matrix_coefficients_to_string((Video::MatrixCoefficients)cicp.matrix_coefficients()));
+                Media::matrix_coefficients_to_string((Media::MatrixCoefficients)cicp.matrix_coefficients()));
             outln("    video full range flag: {} - {}", cicp.video_full_range_flag(),
-                Video::video_full_range_flag_to_string((Video::VideoFullRangeFlag)cicp.video_full_range_flag()));
+                Media::video_full_range_flag_to_string((Media::VideoFullRangeFlag)cicp.video_full_range_flag()));
         } else if (tag_data->type() == Gfx::ICC::CurveTagData::Type) {
             TRY(out_curve_tag(*tag_data, /*indent=*/4));
         } else if (tag_data->type() == Gfx::ICC::Lut16TagData::Type) {
@@ -523,19 +532,19 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
             }
         } else if (tag_data->type() == Gfx::ICC::NamedColor2TagData::Type) {
             auto& named_colors = static_cast<Gfx::ICC::NamedColor2TagData&>(*tag_data);
-            outln("    vendor specific flag: 0x{:08x}", named_colors.vendor_specific_flag());
+            outln("    vendor specific flag: {:#08x}", named_colors.vendor_specific_flag());
             outln("    common name prefix: \"{}\"", named_colors.prefix());
             outln("    common name suffix: \"{}\"", named_colors.suffix());
             outln("    {} colors:", named_colors.size());
             for (size_t i = 0; i < min(named_colors.size(), 5u); ++i) {
-                const auto& pcs = named_colors.pcs_coordinates(i);
+                auto const& pcs = named_colors.pcs_coordinates(i);
 
                 // FIXME: Display decoded values? (See ICC v4 6.3.4.2 and 10.8.)
-                out("        \"{}\", PCS coordinates: 0x{:04x} 0x{:04x} 0x{:04x}", TRY(named_colors.color_name(i)), pcs.xyz.x, pcs.xyz.y, pcs.xyz.z);
+                out("        \"{}\", PCS coordinates: {:#04x} {:#04x} {:#04x}", TRY(named_colors.color_name(i)), pcs.xyz.x, pcs.xyz.y, pcs.xyz.z);
                 if (auto number_of_device_coordinates = named_colors.number_of_device_coordinates(); number_of_device_coordinates > 0) {
                     out(", device coordinates:");
                     for (size_t j = 0; j < number_of_device_coordinates; ++j)
-                        out(" 0x{:04x}", named_colors.device_coordinates(i)[j]);
+                        out(" {:#04x}", named_colors.device_coordinates(i)[j]);
                 }
                 outln();
             }
@@ -568,7 +577,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
             if (auto name = signature.name_for_tag(tag_signature); name.has_value()) {
                 outln("    signature: {}", name.value());
             } else {
-                outln("    signature: Unknown ('{:c}{:c}{:c}{:c}' / 0x{:08x})",
+                outln("    signature: Unknown ('{:c}{:c}{:c}{:c}' / {:#08x})",
                     signature.signature() >> 24, (signature.signature() >> 16) & 0xff, (signature.signature() >> 8) & 0xff, signature.signature() & 0xff,
                     signature.signature());
             }

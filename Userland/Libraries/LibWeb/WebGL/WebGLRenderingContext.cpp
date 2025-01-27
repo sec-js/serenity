@@ -5,6 +5,7 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/WebGLRenderingContextPrototype.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/HTMLCanvasElement.h>
 #include <LibWeb/WebGL/EventNames.h>
@@ -65,7 +66,7 @@ WebGLRenderingContext::~WebGLRenderingContext() = default;
 void WebGLRenderingContext::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::WebGLRenderingContextPrototype>(realm, "WebGLRenderingContext"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(WebGLRenderingContext);
 }
 
 }

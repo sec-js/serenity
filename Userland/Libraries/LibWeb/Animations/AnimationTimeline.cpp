@@ -1,21 +1,22 @@
 /*
- * Copyright (c) 2023, Matthew Olsson <mattco@serenityos.org>.
+ * Copyright (c) 2023-2024, Matthew Olsson <mattco@serenityos.org>.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibWeb/Animations/Animation.h>
 #include <LibWeb/Animations/AnimationTimeline.h>
+#include <LibWeb/Bindings/AnimationTimelinePrototype.h>
 #include <LibWeb/DOM/Document.h>
 
 namespace Web::Animations {
 
 JS_DEFINE_ALLOCATOR(AnimationTimeline);
 
-WebIDL::ExceptionOr<void> AnimationTimeline::set_current_time(Optional<double> value)
+void AnimationTimeline::set_current_time(Optional<double> value)
 {
     if (value == m_current_time)
-        return {};
+        return;
 
     if (m_is_monotonically_increasing && m_current_time.has_value()) {
         if (!value.has_value() || value.value() < m_current_time.value())
@@ -23,11 +24,8 @@ WebIDL::ExceptionOr<void> AnimationTimeline::set_current_time(Optional<double> v
     }
 
     m_current_time = value;
-
     for (auto& animation : m_associated_animations)
-        TRY(animation->set_current_time(value));
-
-    return {};
+        animation->notify_timeline_time_did_change();
 }
 
 void AnimationTimeline::set_associated_document(JS::GCPtr<DOM::Document> document)
@@ -51,7 +49,7 @@ AnimationTimeline::AnimationTimeline(JS::Realm& realm)
 {
 }
 
-AnimationTimeline::~AnimationTimeline()
+void AnimationTimeline::finalize()
 {
     if (m_associated_document)
         m_associated_document->disassociate_with_timeline(*this);
@@ -60,15 +58,14 @@ AnimationTimeline::~AnimationTimeline()
 void AnimationTimeline::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::AnimationTimelinePrototype>(realm, "AnimationTimeline"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(AnimationTimeline);
 }
 
 void AnimationTimeline::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_associated_document);
-    for (auto const& animation : m_associated_animations)
-        visitor.visit(animation);
+    visitor.visit(m_associated_animations);
 }
 
 }

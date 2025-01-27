@@ -7,18 +7,18 @@
 
 #pragma once
 
-#include <AK/URL.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Runtime/Completion.h>
+#include <LibURL/URL.h>
 #include <LibWeb/Bindings/PlatformObject.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/HTML/CrossOrigin/CrossOriginPropertyDescriptorMap.h>
-#include <LibWeb/HTML/HistoryHandlingBehavior.h>
+#include <LibWeb/HTML/Navigable.h>
 
 namespace Web::HTML {
 
 class Location final : public Bindings::PlatformObject {
-    JS_OBJECT(Location, Bindings::PlatformObject);
+    WEB_PLATFORM_OBJECT(Location, Bindings::PlatformObject);
     JS_DECLARE_ALLOCATOR(Location);
 
 public:
@@ -59,8 +59,8 @@ public:
     virtual JS::ThrowCompletionOr<bool> internal_is_extensible() const override;
     virtual JS::ThrowCompletionOr<bool> internal_prevent_extensions() override;
     virtual JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> internal_get_own_property(JS::PropertyKey const&) const override;
-    virtual JS::ThrowCompletionOr<bool> internal_define_own_property(JS::PropertyKey const&, JS::PropertyDescriptor const&) override;
-    virtual JS::ThrowCompletionOr<JS::Value> internal_get(JS::PropertyKey const&, JS::Value receiver, JS::CacheablePropertyMetadata*) const override;
+    virtual JS::ThrowCompletionOr<bool> internal_define_own_property(JS::PropertyKey const&, JS::PropertyDescriptor const&, Optional<JS::PropertyDescriptor>* precomputed_get_own_property = nullptr) override;
+    virtual JS::ThrowCompletionOr<JS::Value> internal_get(JS::PropertyKey const&, JS::Value receiver, JS::CacheablePropertyMetadata*, PropertyLookupPhase) const override;
     virtual JS::ThrowCompletionOr<bool> internal_set(JS::PropertyKey const&, JS::Value value, JS::Value receiver, JS::CacheablePropertyMetadata*) override;
     virtual JS::ThrowCompletionOr<bool> internal_delete(JS::PropertyKey const&) override;
     virtual JS::ThrowCompletionOr<JS::MarkedVector<JS::Value>> internal_own_property_keys() const override;
@@ -75,8 +75,8 @@ private:
     virtual void visit_edges(Cell::Visitor&) override;
 
     JS::GCPtr<DOM::Document> relevant_document() const;
-    AK::URL url() const;
-    WebIDL::ExceptionOr<void> navigate(AK::URL, HistoryHandlingBehavior = HistoryHandlingBehavior::Default);
+    URL::URL url() const;
+    WebIDL::ExceptionOr<void> navigate(URL::URL, Bindings::NavigationHistoryBehavior = Bindings::NavigationHistoryBehavior::Auto);
 
     // [[CrossOriginPropertyDescriptorMap]], https://html.spec.whatwg.org/multipage/browsers.html#crossoriginpropertydescriptormap
     HTML::CrossOriginPropertyDescriptorMap m_cross_origin_property_descriptor_map;

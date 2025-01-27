@@ -10,9 +10,9 @@
 
 namespace Core {
 
-ElapsedTimer ElapsedTimer::start_new()
+ElapsedTimer ElapsedTimer::start_new(TimerType timer_type)
 {
-    ElapsedTimer timer;
+    ElapsedTimer timer(timer_type);
     timer.start();
     return timer;
 }
@@ -20,7 +20,7 @@ ElapsedTimer ElapsedTimer::start_new()
 void ElapsedTimer::start()
 {
     m_valid = true;
-    m_origin_time = m_precise ? MonotonicTime::now() : MonotonicTime::now_coarse();
+    m_origin_time = m_timer_type == TimerType::Precise ? MonotonicTime::now() : MonotonicTime::now_coarse();
 }
 
 void ElapsedTimer::reset()
@@ -36,7 +36,7 @@ i64 ElapsedTimer::elapsed_milliseconds() const
 Duration ElapsedTimer::elapsed_time() const
 {
     VERIFY(is_valid());
-    auto now = m_precise ? MonotonicTime::now() : MonotonicTime::now_coarse();
+    auto now = m_timer_type == TimerType::Precise ? MonotonicTime::now() : MonotonicTime::now_coarse();
     return now - m_origin_time;
 }
 

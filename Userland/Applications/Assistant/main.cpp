@@ -148,6 +148,8 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     TRY(Core::System::pledge("stdio recvfd sendfd rpath cpath unix proc exec thread map_fixed"));
 
+    TRY(Core::System::enter_jail_mode_until_exec());
+
     Core::LockFile lockfile("/tmp/lock/assistant.lock");
 
     if (!lockfile.is_held()) {
@@ -205,7 +207,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
         if (!app_state.selected_index.has_value())
             return;
         lockfile.release();
-        app_state.results[app_state.selected_index.value()]->activate();
+        app_state.results[app_state.selected_index.value()]->activate(window);
         GUI::Application::the()->quit();
     };
     text_box.on_up_pressed = [&]() {
@@ -241,7 +243,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
             GUI::Application::the()->quit();
     };
 
-    auto update_ui_timer = TRY(Core::Timer::create_single_shot(10, [&] {
+    auto update_ui_timer = Core::Timer::create_single_shot(10, [&] {
         results_container.remove_all_children();
         results_container.layout()->set_margins(app_state.visible_result_count ? GUI::Margins { 4, 0, 0, 0 } : GUI::Margins { 0 });
 
@@ -251,15 +253,15 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
             match.set_icon(result->bitmap());
             match.set_text(String::from_byte_string(result->title()).release_value_but_fixme_should_propagate_errors());
             match.set_tooltip(result->tooltip());
-            match.on_click = [&result](auto) {
-                result->activate();
+            match.on_click = [&](auto) {
+                result->activate(window);
                 GUI::Application::the()->quit();
             };
         }
 
         mark_selected_item();
-        Core::deferred_invoke([&] { window->resize(GUI::Desktop::the().rect().width() / 3, {}); });
-    }));
+        Core::deferred_invoke([window] { window->resize(GUI::Desktop::the().rect().width() / 3, {}); });
+    });
 
     db.on_new_results = [&](auto results) {
         if (results.is_empty()) {

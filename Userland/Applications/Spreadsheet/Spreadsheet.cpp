@@ -15,13 +15,13 @@
 #include <AK/JsonParser.h>
 #include <AK/ScopeGuard.h>
 #include <AK/TemporaryChange.h>
-#include <AK/URL.h>
 #include <LibCore/File.h>
 #include <LibJS/Bytecode/Interpreter.h>
 #include <LibJS/Heap/DeferGC.h>
 #include <LibJS/Parser.h>
 #include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/FunctionObject.h>
+#include <LibURL/URL.h>
 #include <ctype.h>
 #include <unistd.h>
 
@@ -167,7 +167,7 @@ JS::ThrowCompletionOr<JS::Value> Sheet::evaluate(StringView source, Cell* on_beh
         name);
 
     if (script_or_error.is_error())
-        return vm().throw_completion<JS::SyntaxError>(TRY_OR_THROW_OOM(vm(), script_or_error.error().first().to_string()));
+        return vm().throw_completion<JS::SyntaxError>(script_or_error.error().first().to_string());
 
     return vm().bytecode_interpreter().run(script_or_error.value());
 }
@@ -243,7 +243,7 @@ Optional<ByteString> Sheet::column_arithmetic(StringView column_name, int offset
     return m_columns.last();
 }
 
-Cell* Sheet::from_url(const URL& url)
+Cell* Sheet::from_url(const URL::URL& url)
 {
     auto maybe_position = position_from_url(url);
     if (!maybe_position.has_value())
@@ -252,7 +252,7 @@ Cell* Sheet::from_url(const URL& url)
     return at(maybe_position.value());
 }
 
-Optional<Position> Sheet::position_from_url(const URL& url) const
+Optional<Position> Sheet::position_from_url(const URL::URL& url) const
 {
     if (!url.is_valid()) {
         dbgln("Invalid url: {}", url.to_byte_string());
@@ -265,7 +265,7 @@ Optional<Position> Sheet::position_from_url(const URL& url) const
     }
 
     // FIXME: Figure out a way to do this cross-process.
-    VERIFY(url.serialize_path() == ByteString::formatted("/{}", getpid()));
+    VERIFY(URL::percent_decode(url.serialize_path()) == ByteString::formatted("/{}", getpid()));
 
     return parse_cell_name(url.fragment().value_or(String {}));
 }
@@ -455,7 +455,7 @@ RefPtr<Sheet> Sheet::from_json(JsonObject const& object, Workbook& workbook)
             auto conditional_formats = obj.get_array("conditional_formats"sv);
             auto cformats = cell->conditional_formats();
             if (conditional_formats.has_value()) {
-                conditional_formats->for_each([&](const auto& fmt_val) {
+                conditional_formats->for_each([&](auto const& fmt_val) {
                     if (!fmt_val.is_object())
                         return IterationDecision::Continue;
 
@@ -747,9 +747,9 @@ ByteString Position::to_cell_identifier(Sheet const& sheet) const
     return ByteString::formatted("{}{}", sheet.column(column), row);
 }
 
-URL Position::to_url(Sheet const& sheet) const
+URL::URL Position::to_url(Sheet const& sheet) const
 {
-    URL url;
+    URL::URL url;
     url.set_scheme("spreadsheet"_string);
     url.set_host("cell"_string);
     url.set_paths({ ByteString::number(getpid()) });

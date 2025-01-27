@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/DOMRectPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Geometry/DOMRect.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
@@ -22,6 +23,11 @@ JS::NonnullGCPtr<DOMRect> DOMRect::create(JS::Realm& realm, Gfx::FloatRect const
     return realm.heap().allocate<DOMRect>(realm, realm, rect.x(), rect.y(), rect.width(), rect.height());
 }
 
+JS::NonnullGCPtr<DOMRect> DOMRect::create(JS::Realm& realm)
+{
+    return realm.heap().allocate<DOMRect>(realm, realm);
+}
+
 // https://drafts.fxtf.org/geometry/#create-a-domrect-from-the-dictionary
 JS::NonnullGCPtr<DOMRect> DOMRect::from_rect(JS::VM& vm, Geometry::DOMRectInit const& other)
 {
@@ -34,12 +40,17 @@ DOMRect::DOMRect(JS::Realm& realm, double x, double y, double width, double heig
 {
 }
 
+DOMRect::DOMRect(JS::Realm& realm)
+    : DOMRectReadOnly(realm)
+{
+}
+
 DOMRect::~DOMRect() = default;
 
 void DOMRect::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::DOMRectPrototype>(realm, "DOMRect"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(DOMRect);
 }
 
 }

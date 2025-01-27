@@ -6,7 +6,10 @@ executable("WebDriver") {
     "//Userland/Services",
     "//Ladybird",
   ]
-  data_deps = [ "//Ladybird:headless-browser" ]
+  data_deps = [
+    "//Ladybird:headless-browser",
+    "//Ladybird:ladybird_executable",
+  ]
   deps = [
     "//AK",
     "//Userland/Libraries/LibCore",
@@ -15,6 +18,7 @@ executable("WebDriver") {
     "//Userland/Libraries/LibIPC",
     "//Userland/Libraries/LibJS",
     "//Userland/Libraries/LibMain",
+    "//Userland/Libraries/LibURL",
     "//Userland/Libraries/LibWeb",
     "//Userland/Libraries/LibWebSocket",
     "//Userland/Libraries/LibWebView:WebDriverClientEndpoint",

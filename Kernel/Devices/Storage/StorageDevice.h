@@ -8,17 +8,16 @@
 
 #include <AK/IntrusiveList.h>
 #include <Kernel/Devices/BlockDevice.h>
-#include <Kernel/Devices/Storage/DiskPartition.h>
 #include <Kernel/Devices/Storage/StorageController.h>
+#include <Kernel/Devices/Storage/StorageDevicePartition.h>
 #include <Kernel/Interrupts/IRQHandler.h>
 #include <Kernel/Locking/Mutex.h>
 
 namespace Kernel {
 
-class RamdiskDevice;
 class StorageDevice : public BlockDevice {
     friend class StorageManagement;
-    friend class DeviceManagement;
+    friend class Device;
 
 public:
     // Note: this attribute describes the internal command set of a Storage device.
@@ -54,18 +53,23 @@ public:
     };
 
 public:
-    virtual u64 max_addressable_block() const { return m_max_addressable_block; }
+    u64 max_addressable_block() const { return m_max_addressable_block; }
+
+    // NOTE: This method should be used when we need to calculate the actual
+    // end of the storage device, because LBAs start counting at 0, which is not
+    // practical in many cases for verifying IO operation boundaries.
+    u64 max_mathematical_addressable_block() const { return m_max_addressable_block + 1; }
 
     // ^BlockDevice
     virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
-    virtual bool can_read(OpenFileDescription const&, u64) const override;
+    virtual bool can_read(OpenFileDescription const&, u64) const override { return true; }
     virtual ErrorOr<size_t> write(OpenFileDescription&, u64, UserOrKernelBuffer const&, size_t) override;
-    virtual bool can_write(OpenFileDescription const&, u64) const override;
+    virtual bool can_write(OpenFileDescription const&, u64) const override { return true; }
     virtual void prepare_for_unplug() { m_partitions.clear(); }
 
-    Vector<NonnullLockRefPtr<DiskPartition>> const& partitions() const { return m_partitions; }
+    Vector<NonnullRefPtr<StorageDevicePartition>> const& partitions() const { return m_partitions; }
 
-    void add_partition(NonnullLockRefPtr<DiskPartition> disk_partition) { MUST(m_partitions.try_append(disk_partition)); }
+    void add_partition(NonnullRefPtr<StorageDevicePartition> disk_partition) { MUST(m_partitions.try_append(disk_partition)); }
 
     LUNAddress const& logical_unit_number_address() const { return m_logical_unit_number_address; }
 
@@ -81,10 +85,6 @@ public:
 protected:
     StorageDevice(LUNAddress, u32 hardware_relative_controller_id, size_t sector_size, u64);
 
-    // Note: We want to be able to put distinction between Storage devices and Ramdisk-based devices.
-    // We do this because it will make selecting ramdisk devices much more easier in boot time in the kernel commandline.
-    StorageDevice(Badge<RamdiskDevice>, LUNAddress, u32 hardware_relative_controller_id, MajorNumber, MinorNumber, size_t sector_size, u64);
-
     // ^DiskDevice
     virtual StringView class_name() const override;
 
@@ -93,7 +93,9 @@ private:
     virtual void will_be_destroyed() override;
 
     mutable IntrusiveListNode<StorageDevice, LockRefPtr<StorageDevice>> m_list_node;
-    Vector<NonnullLockRefPtr<DiskPartition>> m_partitions;
+    // NOTE: This probably need a better locking once we support hotplug and
+    // refresh of the partition table.
+    Vector<NonnullRefPtr<StorageDevicePartition>> m_partitions;
 
     LUNAddress const m_logical_unit_number_address;
 
@@ -104,8 +106,8 @@ private:
     // controller among its fellow controllers of the same hardware type in the system.
     u32 const m_hardware_relative_controller_id { 0 };
 
-    u64 m_max_addressable_block { 0 };
-    size_t m_blocks_per_page { 0 };
+    u64 const m_max_addressable_block { 0 };
+    size_t const m_blocks_per_page { 0 };
 };
 
 }

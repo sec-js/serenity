@@ -1,12 +1,16 @@
 /*
  * Copyright (c) 2023, stelar7 <dudedbz@gmail.com>
+ * Copyright (c) 2024, Andrew Kaster <akaster@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <LibWeb/WebIDL/Buffers.h>
+#include <AK/Optional.h>
+#include <AK/String.h>
+#include <AK/Vector.h>
+#include <LibCrypto/BigInt/UnsignedBigInteger.h>
 
 // FIXME: Generate these from IDL
 namespace Web::Bindings {
@@ -38,39 +42,8 @@ struct JsonWebKey {
     Optional<String> qi;
     Optional<Vector<RsaOtherPrimesInfo>> oth;
     Optional<String> k;
+
+    JS::ThrowCompletionOr<JS::NonnullGCPtr<JS::Object>> to_object(JS::Realm&);
 };
 
-// https://w3c.github.io/webcrypto/#dfn-Algorithm
-struct Algorithm {
-    String name;
-};
-
-// https://w3c.github.io/webcrypto/#key-algorithm-dictionary
-class KeyAlgorithm : public JS::Object {
-    JS_OBJECT(KeyAlgorithm, Object);
-    JS_DECLARE_ALLOCATOR(KeyAlgorithm);
-
-public:
-    static JS::NonnullGCPtr<KeyAlgorithm> create(JS::Realm&);
-    virtual ~KeyAlgorithm() override = default;
-
-    String const& name() const { return m_name; }
-    void set_name(String name) { m_name = move(name); }
-
-private:
-    KeyAlgorithm(JS::Realm&);
-    virtual void initialize(JS::Realm&) override;
-
-    JS_DECLARE_NATIVE_FUNCTION(name_getter);
-
-    String m_name;
-};
-
-// https://w3c.github.io/webcrypto/#pbkdf2-params
-struct Pbkdf2Params {
-    JS::Handle<WebIDL::BufferSource> salt;
-    u32 iterations;
-    Variant<JS::Handle<JS::Object>, String> hash;
-};
-
-};
+}

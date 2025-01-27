@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2021, Jesse Buhagiar <jooster669@gmail.com>
  * Copyright (c) 2021, Stephan Unverwerth <s.unverwerth@serenityos.org>
- * Copyright (c) 2022-2023, Jelle Raaijmakers <jelle@gmta.nl>
+ * Copyright (c) 2022-2024, Jelle Raaijmakers <jelle@gmta.nl>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -259,86 +259,6 @@ void GLContext::gl_finish()
     RETURN_WITH_ERROR_IF(m_in_draw_state, GL_INVALID_OPERATION);
 
     // No-op since GLContext is completely synchronous at the moment
-}
-
-void GLContext::gl_blend_func(GLenum src_factor, GLenum dst_factor)
-{
-    APPEND_TO_CALL_LIST_AND_RETURN_IF_NEEDED(gl_blend_func, src_factor, dst_factor);
-
-    RETURN_WITH_ERROR_IF(m_in_draw_state, GL_INVALID_OPERATION);
-
-    // FIXME: The list of allowed enums differs between API versions
-    // This was taken from the 2.0 spec on https://docs.gl/gl2/glBlendFunc
-
-    RETURN_WITH_ERROR_IF(!(src_factor == GL_ZERO
-                             || src_factor == GL_ONE
-                             || src_factor == GL_SRC_COLOR
-                             || src_factor == GL_ONE_MINUS_SRC_COLOR
-                             || src_factor == GL_DST_COLOR
-                             || src_factor == GL_ONE_MINUS_DST_COLOR
-                             || src_factor == GL_SRC_ALPHA
-                             || src_factor == GL_ONE_MINUS_SRC_ALPHA
-                             || src_factor == GL_DST_ALPHA
-                             || src_factor == GL_ONE_MINUS_DST_ALPHA
-                             || src_factor == GL_CONSTANT_COLOR
-                             || src_factor == GL_ONE_MINUS_CONSTANT_COLOR
-                             || src_factor == GL_CONSTANT_ALPHA
-                             || src_factor == GL_ONE_MINUS_CONSTANT_ALPHA
-                             || src_factor == GL_SRC_ALPHA_SATURATE),
-        GL_INVALID_ENUM);
-
-    RETURN_WITH_ERROR_IF(!(dst_factor == GL_ZERO
-                             || dst_factor == GL_ONE
-                             || dst_factor == GL_SRC_COLOR
-                             || dst_factor == GL_ONE_MINUS_SRC_COLOR
-                             || dst_factor == GL_DST_COLOR
-                             || dst_factor == GL_ONE_MINUS_DST_COLOR
-                             || dst_factor == GL_SRC_ALPHA
-                             || dst_factor == GL_ONE_MINUS_SRC_ALPHA
-                             || dst_factor == GL_DST_ALPHA
-                             || dst_factor == GL_ONE_MINUS_DST_ALPHA
-                             || dst_factor == GL_CONSTANT_COLOR
-                             || dst_factor == GL_ONE_MINUS_CONSTANT_COLOR
-                             || dst_factor == GL_CONSTANT_ALPHA
-                             || dst_factor == GL_ONE_MINUS_CONSTANT_ALPHA),
-        GL_INVALID_ENUM);
-
-    m_blend_source_factor = src_factor;
-    m_blend_destination_factor = dst_factor;
-
-    auto map_gl_blend_factor_to_device = [](GLenum factor) constexpr {
-        switch (factor) {
-        case GL_ZERO:
-            return GPU::BlendFactor::Zero;
-        case GL_ONE:
-            return GPU::BlendFactor::One;
-        case GL_SRC_ALPHA:
-            return GPU::BlendFactor::SrcAlpha;
-        case GL_ONE_MINUS_SRC_ALPHA:
-            return GPU::BlendFactor::OneMinusSrcAlpha;
-        case GL_SRC_COLOR:
-            return GPU::BlendFactor::SrcColor;
-        case GL_ONE_MINUS_SRC_COLOR:
-            return GPU::BlendFactor::OneMinusSrcColor;
-        case GL_DST_ALPHA:
-            return GPU::BlendFactor::DstAlpha;
-        case GL_ONE_MINUS_DST_ALPHA:
-            return GPU::BlendFactor::OneMinusDstAlpha;
-        case GL_DST_COLOR:
-            return GPU::BlendFactor::DstColor;
-        case GL_ONE_MINUS_DST_COLOR:
-            return GPU::BlendFactor::OneMinusDstColor;
-        case GL_SRC_ALPHA_SATURATE:
-            return GPU::BlendFactor::SrcAlphaSaturate;
-        default:
-            VERIFY_NOT_REACHED();
-        }
-    };
-
-    auto options = m_rasterizer->options();
-    options.blend_source_factor = map_gl_blend_factor_to_device(m_blend_source_factor);
-    options.blend_destination_factor = map_gl_blend_factor_to_device(m_blend_destination_factor);
-    m_rasterizer->set_options(options);
 }
 
 void GLContext::gl_alpha_func(GLenum func, GLclampf ref)

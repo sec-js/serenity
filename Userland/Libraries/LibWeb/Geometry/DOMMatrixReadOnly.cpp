@@ -1,22 +1,27 @@
 /*
  * Copyright (c) 2023, Luke Wilde <lukew@serenityos.org>
  * Copyright (c) 2023, Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+ * Copyright (c) 2024, Kenneth Myhra <kennethmyhra@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibJS/Runtime/TypedArray.h>
+#include <LibWeb/Bindings/DOMMatrixReadOnlyPrototype.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/StyleProperties.h>
 #include <LibWeb/CSS/StyleValues/ShorthandStyleValue.h>
 #include <LibWeb/Geometry/DOMMatrix.h>
 #include <LibWeb/Geometry/DOMMatrixReadOnly.h>
 #include <LibWeb/Geometry/DOMPoint.h>
+#include <LibWeb/HTML/StructuredSerialize.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/WebIDL/Buffers.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 
 namespace Web::Geometry {
+
+JS_DEFINE_ALLOCATOR(DOMMatrixReadOnly);
 
 // https://drafts.fxtf.org/geometry/#dom-dommatrixreadonly-dommatrixreadonly
 WebIDL::ExceptionOr<JS::NonnullGCPtr<DOMMatrixReadOnly>> DOMMatrixReadOnly::construct_impl(JS::Realm& realm, Optional<Variant<String, Vector<double>>> const& init)
@@ -115,6 +120,11 @@ WebIDL::ExceptionOr<JS::NonnullGCPtr<DOMMatrixReadOnly>> DOMMatrixReadOnly::crea
         init.m41.value(), init.m42.value(), init.m43, init.m44);
 }
 
+JS::NonnullGCPtr<DOMMatrixReadOnly> DOMMatrixReadOnly::create(JS::Realm& realm)
+{
+    return realm.heap().allocate<DOMMatrixReadOnly>(realm, realm);
+}
+
 DOMMatrixReadOnly::DOMMatrixReadOnly(JS::Realm& realm, double m11, double m12, double m21, double m22, double m41, double m42)
     : Bindings::PlatformObject(realm)
 {
@@ -134,12 +144,17 @@ DOMMatrixReadOnly::DOMMatrixReadOnly(JS::Realm& realm, DOMMatrixReadOnly const& 
 {
 }
 
+DOMMatrixReadOnly::DOMMatrixReadOnly(JS::Realm& realm)
+    : Bindings::PlatformObject(realm)
+{
+}
+
 DOMMatrixReadOnly::~DOMMatrixReadOnly() = default;
 
 void DOMMatrixReadOnly::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::DOMMatrixReadOnlyPrototype>(realm, "DOMMatrixReadOnly"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(DOMMatrixReadOnly);
 }
 
 // https://drafts.fxtf.org/geometry/#create-a-2d-matrix
@@ -435,12 +450,12 @@ JS::NonnullGCPtr<DOMMatrix> DOMMatrixReadOnly::flip_x()
     auto result = DOMMatrix::create_from_dom_matrix_read_only(realm(), *this);
 
     // 2. Post-multiply result with new DOMMatrix([-1, 0, 0, 1, 0, 0]).
-    // clang-format off
-    Gfx::DoubleMatrix4x4 flip_matrix = { -1, 0, 0, 0,
+    Gfx::DoubleMatrix4x4 flip_matrix = {
+        -1, 0, 0, 0,
         0, 1, 0, 0,
         0, 0, 1, 0,
-        0, 0, 0, 1 };
-    // clang-format on
+        0, 0, 0, 1
+    };
     result->m_matrix = result->m_matrix * flip_matrix;
 
     // 3. Return result.
@@ -454,12 +469,12 @@ JS::NonnullGCPtr<DOMMatrix> DOMMatrixReadOnly::flip_y()
     auto result = DOMMatrix::create_from_dom_matrix_read_only(realm(), *this);
 
     // 2. Post-multiply result with new DOMMatrix([1, 0, 0, -1, 0, 0]).
-    // clang-format off
-    Gfx::DoubleMatrix4x4 flip_matrix = { 1, 0, 0, 0,
+    Gfx::DoubleMatrix4x4 flip_matrix = {
+        1, 0, 0, 0,
         0, -1, 0, 0,
         0, 0, 1, 0,
-        0, 0, 0, 1 };
-    // clang-format on
+        0, 0, 0, 1
+    };
     result->m_matrix = result->m_matrix * flip_matrix;
 
     // 3. Return result.
@@ -548,7 +563,7 @@ WebIDL::ExceptionOr<String> DOMMatrixReadOnly::to_string() const
         || !isfinite(m21()) || !isfinite(m22()) || !isfinite(m23()) || !isfinite(m24())
         || !isfinite(m31()) || !isfinite(m32()) || !isfinite(m33()) || !isfinite(m34())
         || !isfinite(m41()) || !isfinite(m42()) || !isfinite(m43()) || !isfinite(m44())) {
-        return WebIDL::InvalidStateError::create(realm(), "Cannot stringify non-finite matrix values"_fly_string);
+        return WebIDL::InvalidStateError::create(realm(), "Cannot stringify non-finite matrix values"_string);
     }
 
     // 2. Let string be the empty string.
@@ -685,6 +700,140 @@ WebIDL::ExceptionOr<String> DOMMatrixReadOnly::to_string() const
     return TRY_OR_THROW_OOM(vm, builder.to_string());
 }
 
+// https://drafts.fxtf.org/geometry/#structured-serialization
+WebIDL::ExceptionOr<void> DOMMatrixReadOnly::serialization_steps(HTML::SerializationRecord& serialized, bool, HTML::SerializationMemory&)
+{
+    HTML::serialize_primitive_type(serialized, m_is_2d);
+    // 1. If value’s is 2D is true:
+    if (m_is_2d) {
+        // 1. Set serialized.[[M11]] to value’s m11 element.
+        HTML::serialize_primitive_type(serialized, this->m11());
+        // 2. Set serialized.[[M12]] to value’s m12 element.
+        HTML::serialize_primitive_type(serialized, this->m12());
+        // 3. Set serialized.[[M21]] to value’s m21 element.
+        HTML::serialize_primitive_type(serialized, this->m21());
+        // 4. Set serialized.[[M22]] to value’s m22 element.
+        HTML::serialize_primitive_type(serialized, this->m22());
+        // 5. Set serialized.[[M41]] to value’s m41 element.
+        HTML::serialize_primitive_type(serialized, this->m41());
+        // 6. Set serialized.[[M42]] to value’s m42 element.
+        HTML::serialize_primitive_type(serialized, this->m42());
+        // 7. Set serialized.[[Is2D]] to true.
+        // NOTE: This is set in the beginning of the function.
+    }
+    // 2. Otherwise:
+    else {
+        // 1. Set serialized.[[M11]] to value’s m11 element.
+        HTML::serialize_primitive_type(serialized, this->m11());
+        // 2. Set serialized.[[M12]] to value’s m12 element.
+        HTML::serialize_primitive_type(serialized, this->m12());
+        // 3. Set serialized.[[M13]] to value’s m13 element.
+        HTML::serialize_primitive_type(serialized, this->m13());
+        // 4. Set serialized.[[M14]] to value’s m14 element.
+        HTML::serialize_primitive_type(serialized, this->m14());
+        // 5. Set serialized.[[M21]] to value’s m21 element.
+        HTML::serialize_primitive_type(serialized, this->m21());
+        // 6. Set serialized.[[M22]] to value’s m22 element.
+        HTML::serialize_primitive_type(serialized, this->m22());
+        // 7. Set serialized.[[M23]] to value’s m23 element.
+        HTML::serialize_primitive_type(serialized, this->m23());
+        // 8. Set serialized.[[M24]] to value’s m24 element.
+        HTML::serialize_primitive_type(serialized, this->m24());
+        // 9. Set serialized.[[M31]] to value’s m31 element.
+        HTML::serialize_primitive_type(serialized, this->m31());
+        // 10. Set serialized.[[M32]] to value’s m32 element.
+        HTML::serialize_primitive_type(serialized, this->m32());
+        // 11. Set serialized.[[M33]] to value’s m33 element.
+        HTML::serialize_primitive_type(serialized, this->m33());
+        // 12. Set serialized.[[M34]] to value’s m34 element.
+        HTML::serialize_primitive_type(serialized, this->m34());
+        // 13. Set serialized.[[M41]] to value’s m41 element.
+        HTML::serialize_primitive_type(serialized, this->m41());
+        // 14. Set serialized.[[M42]] to value’s m42 element.
+        HTML::serialize_primitive_type(serialized, this->m42());
+        // 15. Set serialized.[[M43]] to value’s m43 element.
+        HTML::serialize_primitive_type(serialized, this->m43());
+        // 16. Set serialized.[[M44]] to value’s m44 element.
+        HTML::serialize_primitive_type(serialized, this->m44());
+        // 17. Set serialized.[[Is2D]] to false.
+        // NOTE: This is set in the beginning of the function.
+    }
+    return {};
+}
+
+// https://drafts.fxtf.org/geometry/#structured-serialization
+WebIDL::ExceptionOr<void> DOMMatrixReadOnly::deserialization_steps(ReadonlySpan<u32> const& record, size_t& position, HTML::DeserializationMemory&)
+{
+    bool is_2d = HTML::deserialize_primitive_type<bool>(record, position);
+    // 1. If serialized.[[Is2D]] is true:
+    if (is_2d) {
+        // 1. Set value’s m11 element to serialized.[[M11]].
+        double m11 = HTML::deserialize_primitive_type<double>(record, position);
+        // 2. Set value’s m12 element to serialized.[[M12]].
+        double m12 = HTML::deserialize_primitive_type<double>(record, position);
+        // 3. Set value’s m13 element to 0.
+        // 4. Set value’s m14 element to 0.
+        // 5. Set value’s m21 element to serialized.[[M21]].
+        double m21 = HTML::deserialize_primitive_type<double>(record, position);
+        // 6. Set value’s m22 element to serialized.[[M22]].
+        double m22 = HTML::deserialize_primitive_type<double>(record, position);
+        // 7. Set value’s m23 element to 0.
+        // 8. Set value’s m24 element to 0.
+        // 9. Set value’s m31 element to 0.
+        // 10. Set value’s m32 element to 0.
+        // 11. Set value’s m33 element to 1.
+        // 12. Set value’s m34 element to 0.
+        // 13. Set value’s m41 element to serialized.[[M41]].
+        double m41 = HTML::deserialize_primitive_type<double>(record, position);
+        // 14 Set value’s m42 element to serialized.[[M42]].
+        double m42 = HTML::deserialize_primitive_type<double>(record, position);
+        // 15. Set value’s m43 element to 0.
+        // 16. Set value’s m44 element to 1.
+        // 17. Set value’s is 2D to true.
+
+        initialize_from_create_2d_matrix(m11, m12, m21, m22, m41, m42);
+    }
+    // 2. Otherwise:
+    else {
+        // 1. Set value’s m11 element to serialized.[[M11]].
+        double m11 = HTML::deserialize_primitive_type<double>(record, position);
+        // 2. Set value’s m12 element to serialized.[[M12]].
+        double m12 = HTML::deserialize_primitive_type<double>(record, position);
+        // 3. Set value’s m13 element to serialized.[[M13]].
+        double m13 = HTML::deserialize_primitive_type<double>(record, position);
+        // 4. Set value’s m14 element to serialized.[[M14]].
+        double m14 = HTML::deserialize_primitive_type<double>(record, position);
+        // 5. Set value’s m21 element to serialized.[[M21]].
+        double m21 = HTML::deserialize_primitive_type<double>(record, position);
+        // 6. Set value’s m22 element to serialized.[[M22]].
+        double m22 = HTML::deserialize_primitive_type<double>(record, position);
+        // 7. Set value’s m23 element to serialized.[[M23]].
+        double m23 = HTML::deserialize_primitive_type<double>(record, position);
+        // 8. Set value’s m24 element to serialized.[[M24]].
+        double m24 = HTML::deserialize_primitive_type<double>(record, position);
+        // 9. Set value’s m31 element to serialized.[[M31]].
+        double m31 = HTML::deserialize_primitive_type<double>(record, position);
+        // 10. Set value’s m32 element to serialized.[[M32]].
+        double m32 = HTML::deserialize_primitive_type<double>(record, position);
+        // 11. Set value’s m33 element to serialized.[[M33]].
+        double m33 = HTML::deserialize_primitive_type<double>(record, position);
+        // 12. Set value’s m34 element to serialized.[[M34]].
+        double m34 = HTML::deserialize_primitive_type<double>(record, position);
+        // 13. Set value’s m41 element to serialized.[[M41]].
+        double m41 = HTML::deserialize_primitive_type<double>(record, position);
+        // 14. Set value’s m42 element to serialized.[[M42]].
+        double m42 = HTML::deserialize_primitive_type<double>(record, position);
+        // 15. Set value’s m43 element to serialized.[[M43]].
+        double m43 = HTML::deserialize_primitive_type<double>(record, position);
+        // 16. Set value’s m44 element to serialized.[[M44]].
+        double m44 = HTML::deserialize_primitive_type<double>(record, position);
+        // 17. Set value’s is 2D to false.
+
+        initialize_from_create_3d_matrix(m11, m12, m13, m14, m21, m22, m23, m24, m31, m32, m33, m34, m41, m42, m43, m44);
+    }
+    return {};
+}
+
 // https://drafts.fxtf.org/geometry/#matrix-validate-and-fixup-2d
 WebIDL::ExceptionOr<void> validate_and_fixup_dom_matrix_2d_init(DOMMatrix2DInit& init)
 {
@@ -800,7 +949,7 @@ WebIDL::ExceptionOr<ParsedMatrix> parse_dom_matrix_init_string(JS::Realm& realm,
     auto parsing_context = CSS::Parser::ParsingContext { realm };
     auto transform_style_value = parse_css_value(parsing_context, transform_list, CSS::PropertyID::Transform);
     if (!transform_style_value)
-        return WebIDL::SyntaxError::create(realm, "Failed to parse CSS transform string."_fly_string);
+        return WebIDL::SyntaxError::create(realm, "Failed to parse CSS transform string."_string);
     auto parsed_value = CSS::StyleProperties::transformations_for_style_value(*transform_style_value);
 
     // 3. If parsedValue is none, set parsedValue to a <transform-list> containing a single identity matrix.
@@ -832,7 +981,7 @@ WebIDL::ExceptionOr<ParsedMatrix> parse_dom_matrix_init_string(JS::Realm& realm,
     for (auto const& transform : parsed_value) {
         auto const& transform_matrix = transform.to_matrix({});
         if (transform_matrix.is_error())
-            return WebIDL::SyntaxError::create(realm, "Failed to parse CSS transform string."_fly_string);
+            return WebIDL::SyntaxError::create(realm, "Failed to parse CSS transform string."_string);
         matrix = matrix * transform_matrix.value();
     }
 

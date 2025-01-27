@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/DOMPointPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Geometry/DOMPoint.h>
 
@@ -17,8 +18,18 @@ JS::NonnullGCPtr<DOMPoint> DOMPoint::construct_impl(JS::Realm& realm, double x, 
     return realm.heap().allocate<DOMPoint>(realm, realm, x, y, z, w);
 }
 
+JS::NonnullGCPtr<DOMPoint> DOMPoint::create(JS::Realm& realm)
+{
+    return realm.heap().allocate<DOMPoint>(realm, realm);
+}
+
 DOMPoint::DOMPoint(JS::Realm& realm, double x, double y, double z, double w)
     : DOMPointReadOnly(realm, x, y, z, w)
+{
+}
+
+DOMPoint::DOMPoint(JS::Realm& realm)
+    : DOMPointReadOnly(realm)
 {
 }
 
@@ -34,7 +45,7 @@ DOMPoint::~DOMPoint() = default;
 void DOMPoint::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::DOMPointPrototype>(realm, "DOMPoint"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(DOMPoint);
 }
 
 }

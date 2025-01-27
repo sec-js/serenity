@@ -6,13 +6,13 @@
 
 #pragma once
 
-#include "Parser/ParseError.h"
 #include "Parser/Token.h"
 
 namespace JSSpecCompiler {
 
 inline constexpr StringView tag_emu_alg = "emu-alg"sv;
 inline constexpr StringView tag_emu_clause = "emu-clause"sv;
+inline constexpr StringView tag_emu_const = "emu-const"sv;
 inline constexpr StringView tag_emu_import = "emu-import"sv;
 inline constexpr StringView tag_emu_intro = "emu-intro"sv;
 inline constexpr StringView tag_emu_val = "emu-val"sv;
@@ -23,6 +23,7 @@ inline constexpr StringView tag_ol = "ol"sv;
 inline constexpr StringView tag_p = "p"sv;
 inline constexpr StringView tag_span = "span"sv;
 inline constexpr StringView tag_specification = "specification"sv;
+inline constexpr StringView tag_sup = "sup"sv;
 inline constexpr StringView tag_var = "var"sv;
 
 inline constexpr StringView attribute_aoid = "aoid"sv;
@@ -31,13 +32,12 @@ inline constexpr StringView attribute_id = "id"sv;
 
 inline constexpr StringView class_secnum = "secnum"sv;
 
-ParseErrorOr<void> tokenize_string(XML::Node const* node, StringView view, Vector<Token>& tokens);
-
-struct TokenizeTreeResult {
-    Vector<Token> tokens;
+struct StepTokenizationResult {
+    Optional<Vector<Token>> tokens;
     XML::Node const* substeps = nullptr;
 };
 
-ParseErrorOr<TokenizeTreeResult> tokenize_tree(XML::Node const* node, bool allow_substeps = false);
+StepTokenizationResult tokenize_step(SpecificationParsingContext& ctx, XML::Node const* node);
+Optional<Vector<Token>> tokenize_header(SpecificationParsingContext& ctx, XML::Node const* node);
 
 }

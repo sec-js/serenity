@@ -33,7 +33,7 @@ static ErrorOr<Optional<String>> image_details(StringView description, StringVie
 {
     auto mapped_file = TRY(Core::MappedFile::map(path));
     auto mime_type = Core::guess_mime_type_based_on_filename(path);
-    auto image_decoder = Gfx::ImageDecoder::try_create_for_raw_bytes(mapped_file->bytes(), mime_type);
+    auto image_decoder = TRY(Gfx::ImageDecoder::try_create_for_raw_bytes(mapped_file->bytes(), mime_type));
     if (!image_decoder)
         return OptionalNone {};
 
@@ -128,10 +128,13 @@ static ErrorOr<Optional<String>> elf_details(StringView description, StringView 
     if (!elf_image.is_valid())
         return OptionalNone {};
 
-    StringBuilder interpreter_path_builder;
-    auto result_or_error = ELF::validate_program_headers(*(Elf_Ehdr const*)elf_data.data(), elf_data.size(), elf_data, &interpreter_path_builder);
-    if (result_or_error.is_error() || !result_or_error.value())
+    Optional<Elf_Phdr> interpreter_path_program_header {};
+    if (!ELF::validate_program_headers(*bit_cast<Elf_Ehdr const*>(elf_data.data()), elf_data.size(), elf_data, interpreter_path_program_header))
         return OptionalNone {};
+
+    StringBuilder interpreter_path_builder;
+    if (interpreter_path_program_header.has_value())
+        TRY(interpreter_path_builder.try_append({ elf_data.offset(interpreter_path_program_header.value().p_offset), static_cast<size_t>(interpreter_path_program_header.value().p_filesz) - 1 }));
     auto interpreter_path = interpreter_path_builder.string_view();
 
     auto& header = *reinterpret_cast<Elf_Ehdr const*>(elf_data.data());
@@ -168,17 +171,17 @@ static constexpr Array s_pattern_with_specialized_functions {
 
 static ErrorOr<Optional<String>> get_description_from_mime_type(StringView mime, StringView path)
 {
-    auto const description = Core::get_description_from_mime_type(mime);
+    auto const mime_type = Core::get_mime_type_data(mime);
 
-    if (!description.has_value())
+    if (!mime_type.has_value())
         return OptionalNone {};
 
     for (auto const& pattern : s_pattern_with_specialized_functions) {
         if (mime.matches(pattern.matching_pattern))
-            return pattern.details(*description, path);
+            return pattern.details(mime_type->description, path);
     }
 
-    return description_only(*description, path);
+    return description_only(mime_type->description, path);
 }
 
 ErrorOr<int> serenity_main(Main::Arguments arguments)

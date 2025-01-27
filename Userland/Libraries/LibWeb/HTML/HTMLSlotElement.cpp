@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLSlotElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/Text.h>
@@ -24,7 +25,7 @@ HTMLSlotElement::~HTMLSlotElement() = default;
 void HTMLSlotElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLSlotElementPrototype>(realm, "HTMLSlotElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLSlotElement);
 }
 
 void HTMLSlotElement::visit_edges(JS::Cell::Visitor& visitor)
@@ -37,7 +38,7 @@ void HTMLSlotElement::visit_edges(JS::Cell::Visitor& visitor)
 }
 
 // https://html.spec.whatwg.org/multipage/scripting.html#dom-slot-assignednodes
-Vector<JS::Handle<DOM::Node>> HTMLSlotElement::assigned_nodes(AssignedNodesOptions options)
+Vector<JS::Handle<DOM::Node>> HTMLSlotElement::assigned_nodes(AssignedNodesOptions options) const
 {
     // 1. If options["flatten"] is false, then return this's assigned nodes.
     if (!options.flatten) {
@@ -58,7 +59,7 @@ Vector<JS::Handle<DOM::Node>> HTMLSlotElement::assigned_nodes(AssignedNodesOptio
 }
 
 // https://html.spec.whatwg.org/multipage/scripting.html#dom-slot-assignedelements
-Vector<JS::Handle<DOM::Element>> HTMLSlotElement::assigned_elements(AssignedNodesOptions options)
+Vector<JS::Handle<DOM::Element>> HTMLSlotElement::assigned_elements(AssignedNodesOptions options) const
 {
     // 1. If options["flatten"] is false, then return this's assigned nodes, filtered to contain only Element nodes.
     if (!options.flatten) {

@@ -13,8 +13,10 @@
 #include <AK/Variant.h>
 #include <LibCore/SharedCircularQueue.h>
 #include <LibIPC/Concepts.h>
+#include <LibIPC/File.h>
 #include <LibIPC/Forward.h>
 #include <LibIPC/Message.h>
+#include <LibURL/Forward.h>
 
 namespace IPC {
 
@@ -100,13 +102,27 @@ template<>
 ErrorOr<void> encode(Encoder&, UnixDateTime const&);
 
 template<>
-ErrorOr<void> encode(Encoder&, URL const&);
+ErrorOr<void> encode(Encoder&, URL::URL const&);
+
+template<>
+ErrorOr<void> encode(Encoder&, URL::Origin const&);
 
 template<>
 ErrorOr<void> encode(Encoder&, File const&);
 
 template<>
 ErrorOr<void> encode(Encoder&, Empty const&);
+
+template<typename T, size_t N>
+ErrorOr<void> encode(Encoder& encoder, Array<T, N> const& array)
+{
+    TRY(encoder.encode_size(array.size()));
+
+    for (auto const& value : array)
+        TRY(encoder.encode(value));
+
+    return {};
+}
 
 template<Concepts::Vector T>
 ErrorOr<void> encode(Encoder& encoder, T const& vector)
@@ -136,7 +152,8 @@ ErrorOr<void> encode(Encoder& encoder, T const& hashmap)
 template<Concepts::SharedSingleProducerCircularQueue T>
 ErrorOr<void> encode(Encoder& encoder, T const& queue)
 {
-    return encoder.encode(IPC::File { queue.fd() });
+    TRY(encoder.encode(TRY(IPC::File::clone_fd(queue.fd()))));
+    return {};
 }
 
 template<Concepts::Optional T>

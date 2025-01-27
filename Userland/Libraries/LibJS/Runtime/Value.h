@@ -131,6 +131,8 @@ public:
         Number,
     };
 
+    [[nodiscard]] u16 tag() const { return m_value.tag; }
+
     bool is_empty() const { return m_value.tag == EMPTY_TAG; }
     bool is_undefined() const { return m_value.tag == UNDEFINED_TAG; }
     bool is_null() const { return m_value.tag == NULL_TAG; }
@@ -146,6 +148,7 @@ public:
     ThrowCompletionOr<bool> is_array(VM&) const;
     bool is_function() const;
     bool is_constructor() const;
+    bool is_error() const;
     ThrowCompletionOr<bool> is_regexp(VM&) const;
 
     bool is_nan() const
@@ -382,6 +385,7 @@ public:
     ThrowCompletionOr<String> to_string(VM&) const;
     ThrowCompletionOr<ByteString> to_byte_string(VM&) const;
     ThrowCompletionOr<Utf16String> to_utf16_string(VM&) const;
+    ThrowCompletionOr<String> to_well_formed_string(VM&) const;
     ThrowCompletionOr<NonnullGCPtr<PrimitiveString>> to_primitive_string(VM&);
     ThrowCompletionOr<Value> to_primitive(VM&, PreferredType preferred_type = PreferredType::Default) const;
     ThrowCompletionOr<NonnullGCPtr<Object>> to_object(VM&) const;
@@ -416,7 +420,7 @@ public:
         return *this;
     }
 
-    StringView typeof() const;
+    [[nodiscard]] NonnullGCPtr<PrimitiveString> typeof_(VM&) const;
 
     bool operator==(Value const&) const;
 
@@ -602,6 +606,9 @@ public:
 
     Optional() = default;
 
+    template<SameAs<OptionalNone> V>
+    Optional(V) { }
+
     Optional(Optional<JS::Value> const& other)
     {
         if (other.has_value())
@@ -614,10 +621,18 @@ public:
     }
 
     template<typename U = JS::Value>
+    requires(!IsSame<OptionalNone, RemoveCVReference<U>>)
     explicit(!IsConvertible<U&&, JS::Value>) Optional(U&& value)
     requires(!IsSame<RemoveCVReference<U>, Optional<JS::Value>> && IsConstructible<JS::Value, U &&>)
         : m_value(forward<U>(value))
     {
+    }
+
+    template<SameAs<OptionalNone> V>
+    Optional& operator=(V)
+    {
+        clear();
+        return *this;
     }
 
     Optional& operator=(Optional const& other)
@@ -722,6 +737,7 @@ struct Formatter<JS::Value> : Formatter<StringView> {
 template<>
 struct Traits<JS::Value> : DefaultTraits<JS::Value> {
     static unsigned hash(JS::Value value) { return Traits<u64>::hash(value.encoded()); }
+    static constexpr bool is_trivial() { return true; }
 };
 
 }

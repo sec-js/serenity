@@ -8,7 +8,7 @@
 #include <AK/ByteBuffer.h>
 #include <AK/ByteString.h>
 #include <AK/ScopeGuard.h>
-#include <Kernel/Net/IPv4.h>
+#include <Kernel/Net/IP/IPv4.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netdb.h>
@@ -19,11 +19,7 @@
 
 extern "C" {
 
-#ifdef NO_TLS
-int h_errno;
-#else
 __thread int h_errno;
-#endif
 
 static hostent __gethostbyname_buffer;
 static in_addr_t __gethostbyname_address;
@@ -394,10 +390,13 @@ hostent* gethostbyaddr(void const* addr, socklen_t addr_size, int type)
         return nullptr;
     }
 
-    char* buffer;
-    auto string_impl = StringImpl::create_uninitialized(response_header.name_length, buffer);
+    ssize_t nreceived;
 
-    if (auto nreceived = read(fd, buffer, response_header.name_length); nreceived < 0) {
+    gethostbyaddr_name_buffer = ByteString::create_and_overwrite(response_header.name_length, [&](Bytes bytes) {
+        nreceived = read(fd, bytes.data(), bytes.size());
+    });
+
+    if (nreceived < 0) {
         h_errno = TRY_AGAIN;
         return nullptr;
     } else if (static_cast<u32>(nreceived) != response_header.name_length) {
@@ -405,8 +404,7 @@ hostent* gethostbyaddr(void const* addr, socklen_t addr_size, int type)
         return nullptr;
     }
 
-    gethostbyaddr_name_buffer = move(string_impl);
-    __gethostbyaddr_buffer.h_name = buffer;
+    __gethostbyaddr_buffer.h_name = const_cast<char*>(gethostbyaddr_name_buffer.characters());
     __gethostbyaddr_alias_list_buffer[0] = nullptr;
     __gethostbyaddr_buffer.h_aliases = __gethostbyaddr_alias_list_buffer;
     __gethostbyaddr_buffer.h_addrtype = AF_INET;

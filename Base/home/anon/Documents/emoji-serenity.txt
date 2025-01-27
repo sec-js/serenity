@@ -81,7 +81,22 @@ ZWJ Sequence Flags (limited cross-platform support)
 Emoji Tag Sequence Flags (limited cross-platform support)
 ------------------------
 
+🏴󠁢󠁱󠁢󠁯󠁿 - U+1F3F4 U+E0062 U+E0071 U+E0062 U+E006F U+E007F BQ-BO Bonaire
+🏴󠁢󠁱󠁳󠁡󠁿 - U+1F3F4 U+E0062 U+E0071 U+E0073 U+E0061 U+E007F BQ-SA Saba
+🏴󠁢󠁱󠁳󠁥󠁿 - U+1F3F4 U+E0062 U+E0071 U+E0073 U+E0065 U+E007F BQ-SE Sint Eustatius
+🏴󠁣󠁡󠁡󠁢󠁿 - U+1F3F4 U+E0063 U+E0061 U+E0061 U+E0062 U+E007F CA-AB Alberta
+🏴󠁣󠁡󠁢󠁣󠁿 - U+1F3F4 U+E0063 U+E0061 U+E0062 U+E0063 U+E007F CA-BC British Columbia
+🏴󠁣󠁡󠁭󠁢󠁿 - U+1F3F4 U+E0063 U+E0061 U+E006D U+E0062 U+E007F CA-MB Manitoba
+🏴󠁣󠁡󠁮󠁢󠁿 - U+1F3F4 U+E0063 U+E0061 U+E006E U+E0062 U+E007F CA-NB New Brunswick
+🏴󠁣󠁡󠁮󠁬󠁿 - U+1F3F4 U+E0063 U+E0061 U+E006E U+E006C U+E007F CA-NL Newfoundland and Labrador
+🏴󠁣󠁡󠁮󠁳󠁿 - U+1F3F4 U+E0063 U+E0061 U+E006E U+E0073 U+E007F CA-NS Nova Scotia
+🏴󠁣󠁡󠁮󠁴󠁿 - U+1F3F4 U+E0063 U+E0061 U+E006E U+E0074 U+E007F CA-NT Northwest Territories
+🏴󠁣󠁡󠁮󠁵󠁿 - U+1F3F4 U+E0063 U+E0061 U+E006E U+E0075 U+E007F CA-NU Nunavut
+🏴󠁣󠁡󠁯󠁮󠁿 - U+1F3F4 U+E0063 U+E0061 U+E006F U+E006E U+E007F CA-ON Ontario
+🏴󠁣󠁡󠁰󠁥󠁿 - U+1F3F4 U+E0063 U+E0061 U+E0070 U+E0065 U+E007F CA-PE Prince Edward Island
 🏴󠁣󠁡󠁱󠁣󠁿 - U+1F3F4 U+E0063 U+E0061 U+E0071 U+E0063 U+E007F CA-QC Quebec
+🏴󠁣󠁡󠁳󠁫󠁿 - U+1F3F4 U+E0063 U+E0061 U+E0073 U+E006B U+E007F CA-SK Saskatchewan
+🏴󠁣󠁡󠁹󠁴󠁿 - U+1F3F4 U+E0063 U+E0061 U+E0079 U+E0074 U+E007F CA-YT Yukon
 🏴󠁤󠁥󠁢󠁢󠁿 - U+1F3F4 U+E0064 U+E0065 U+E0062 U+E0062 U+E007F DE-BB Brandenburg
 🏴󠁤󠁥󠁢󠁥󠁿 - U+1F3F4 U+E0064 U+E0065 U+E0062 U+E0065 U+E007F DE-BE Berlin
 🏴󠁤󠁥󠁢󠁷󠁿 - U+1F3F4 U+E0064 U+E0065 U+E0062 U+E0077 U+E007F DE-BW Baden-Württemberg
@@ -124,6 +139,14 @@ Emoji Tag Sequence Flags (limited cross-platform support)
 🏴󠁩󠁥󠁬󠁿 - U+1F3F4 U+E0069 U+E0065 U+E006C U+E007F         IE-L Leinster
 🏴󠁩󠁥󠁭󠁿 - U+1F3F4 U+E0069 U+E0065 U+E006D U+E007F         IE-M Munster
 🏴󠁩󠁥󠁵󠁿 - U+1F3F4 U+E0069 U+E0065 U+E0075 U+E007F         IE-U Ulster
+🏴󠁫󠁲󠀱󠀱󠁿 - U+1F3F4 U+E006B U+E0072 U+E0031 U+E0031 U+E007F KR-11 Seoul
+🏴󠁫󠁲󠀲󠀹󠁿 - U+1F3F4 U+E006B U+E0072 U+E0032 U+E0039 U+E007F KR-29 Gwangju City
+🏴󠁫󠁲󠀳󠀰󠁿 - U+1F3F4 U+E006B U+E0072 U+E0033 U+E0030 U+E007F KR-30 Daejeon
+🏴󠁫󠁲󠀴󠀱󠁿 - U+1F3F4 U+E006B U+E0072 U+E0034 U+E0031 U+E007F KR-41 Gyeonggi
+🏴󠁫󠁲󠀴󠀴󠁿 - U+1F3F4 U+E006B U+E0072 U+E0034 U+E0034 U+E007F KR-44 South Chungcheong
+🏴󠁫󠁲󠀴󠀶󠁿 - U+1F3F4 U+E006B U+E0072 U+E0034 U+E0036 U+E007F KR-46 South Jeolla
+🏴󠁫󠁲󠀴󠀸󠁿 - U+1F3F4 U+E006B U+E0072 U+E0034 U+E0038 U+E007F KR-48 South Gyeongsang
+🏴󠁫󠁲󠀴󠀹󠁿 - U+1F3F4 U+E006B U+E0072 U+E0034 U+E0039 U+E007F KR-49 Jeju
 🏴󠁬󠁲󠁢󠁭󠁿 - U+1F3F4 U+E006C U+E0072 U+E0062 U+E006D U+E007F LR-BM Bomi
 🏴󠁬󠁲󠁢󠁧󠁿 - U+1F3F4 U+E006C U+E0072 U+E0062 U+E0067 U+E007F LR-BG Bong
 🏴󠁬󠁲󠁧󠁰󠁿 - U+1F3F4 U+E006C U+E0072 U+E0067 U+E0070 U+E007F LR-GP Gbarpolu
@@ -139,6 +162,21 @@ Emoji Tag Sequence Flags (limited cross-platform support)
 🏴󠁬󠁲󠁲󠁩󠁿 - U+1F3F4 U+E006C U+E0072 U+E0072 U+E0069 U+E007F LR-RI Rivercess
 🏴󠁬󠁲󠁲󠁧󠁿 - U+1F3F4 U+E006C U+E0072 U+E0072 U+E0067 U+E007F LR-RG River Gee
 🏴󠁬󠁲󠁳󠁩󠁿 - U+1F3F4 U+E006C U+E0072 U+E0073 U+E0069 U+E007F LR-SI Sinoe
+🏴󠁮󠁬󠁢󠁱󠀱󠁿 - U+1F3F4 U+E006E U+E006C U+E0062 U+E0071 U+E0031 U+E007F NL-BQ1 Bonaire
+🏴󠁮󠁬󠁢󠁱󠀲󠁿 - U+1F3F4 U+E006E U+E006C U+E0062 U+E0071 U+E0032 U+E007F NL-BQ2 Saba
+🏴󠁮󠁬󠁢󠁱󠀳󠁿 - U+1F3F4 U+E006E U+E006C U+E0062 U+E0071 U+E0033 U+E007F NL-BQ3 Sint Eustatius
+🏴󠁮󠁬󠁤󠁲󠁿 - U+1F3F4 U+E006E U+E006C U+E0064 U+E0072 U+E007F NL-DR Drenthe
+🏴󠁮󠁬󠁦󠁬󠁿 - U+1F3F4 U+E006E U+E006C U+E0066 U+E006C U+E007F NL-FL Flevoland
+🏴󠁮󠁬󠁦󠁲󠁿 - U+1F3F4 U+E006E U+E006C U+E0066 U+E0072 U+E007F NL-FR Friesland
+🏴󠁮󠁬󠁧󠁥󠁿 - U+1F3F4 U+E006E U+E006C U+E0067 U+E0065 U+E007F NL-GE Gelderland
+🏴󠁮󠁬󠁧󠁲󠁿 - U+1F3F4 U+E006E U+E006C U+E0067 U+E0072 U+E007F NL-GR Groningen
+🏴󠁮󠁬󠁬󠁩󠁿 - U+1F3F4 U+E006E U+E006C U+E006C U+E0069 U+E007F NL-LI Limburg
+🏴󠁮󠁬󠁮󠁢󠁿 - U+1F3F4 U+E006E U+E006C U+E006E U+E0062 U+E007F NL-NB North Brabant
+🏴󠁮󠁬󠁮󠁨󠁿 - U+1F3F4 U+E006E U+E006C U+E006E U+E0068 U+E007F NL-NH North Holland
+🏴󠁮󠁬󠁯󠁶󠁿 - U+1F3F4 U+E006E U+E006C U+E006F U+E0076 U+E007F NL-OV Overijssel
+🏴󠁮󠁬󠁵󠁴󠁿 - U+1F3F4 U+E006E U+E006C U+E0075 U+E0074 U+E007F NL-UT Utrecht
+🏴󠁮󠁬󠁺󠁥󠁿 - U+1F3F4 U+E006E U+E006C U+E007A U+E0065 U+E007F NL-ZE Zeeland
+🏴󠁮󠁬󠁺󠁨󠁿 - U+1F3F4 U+E006E U+E006C U+E007A U+E0068 U+E007F NL-ZH South Holland
 🏴󠁮󠁯󠀰󠀱󠁿 - U+1F3F4 U+E006E U+E006F U+E0030 U+E0031 U+E007F NO-01 Østfold
 🏴󠁮󠁯󠀰󠀲󠁿 - U+1F3F4 U+E006E U+E006F U+E0030 U+E0032 U+E007F NO-02 Akershus
 🏴󠁮󠁯󠀰󠀳󠁿 - U+1F3F4 U+E006E U+E006F U+E0030 U+E0033 U+E007F NO-03 Oslo
@@ -219,6 +257,9 @@ Emoji Tag Sequence Flags (limited cross-platform support)
 🏴󠁵󠁡󠀷󠀱󠁿 - U+1F3F4 U+E0075 U+E0061 U+E0037 U+E0031 U+E007F UA-71 Cherkashchyna
 🏴󠁵󠁡󠀷󠀴󠁿 - U+1F3F4 U+E0075 U+E0061 U+E0037 U+E0034 U+E007F UA-74 Chernihivshchyna
 🏴󠁵󠁡󠀷󠀷󠁿 - U+1F3F4 U+E0075 U+E0061 U+E0037 U+E0037 U+E007F UA-77 Chernivtsi Oblast
+🏴󠁵󠁳󠁡󠁬󠁿 - U+1F3F4 U+E0075 U+E0073 U+E0061 U+E006C U+E007F US-AL Alabama
+🏴󠁵󠁳󠁡󠁺󠁿 - U+1F3F4 U+E0075 U+E0073 U+E0061 U+E007A U+E007F US-AZ Arizona
+🏴󠁵󠁳󠁴󠁸󠁿 - U+1F3F4 U+E0075 U+E0073 U+E0074 U+E0078 U+E007F US-TX Texas
 🏴󠁺󠁷󠁨󠁡󠁿 - U+1F3F4 U+E007A U+E0077 U+E0068 U+E0061 U+E007F ZW-HA Harare
 
 Emoji 15.1
@@ -233,3 +274,14 @@ Emoji 15.1
 🧑‍🧑‍🧒 - U+1F9D1 U+200D U+1F9D1 U+200D U+1F9D2 FAMILY: ADULT, ADULT, CHILD
 🧑‍🧒‍🧒 - U+1F9D1 U+200D U+1F9D2 U+200D U+1F9D2 FAMILY: ADULT, CHILD, CHILD
 🧑‍🧑‍🧒‍🧒 - U+1F9D1 U+200D U+1F9D1 U+200D U+1F9D2 U+200D U+1F9D2 FAMILY: ADULT, ADULT, CHILD, CHILD
+
+Emoji 16
+----------
+🫩 - U+1FAE9 FACE WITH BAGS UNDER EYES
+🫟 - U+1FADF SPLATTER
+🪉 - U+1FA89 HARP
+🫆 - U+1FAC6 FINGERPRINT
+🫜 - U+1FADC ROOT VEGETABLE
+🪾 - U+1FABE LEAFLESS TREE
+🪏 - U+1FA8F SHOVEL
+🇨🇶 - U+1F1E8 U+1F1F6 CQ SARK

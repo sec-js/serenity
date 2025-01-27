@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2022, Daniel Ehrenberg <dan@littledan.dev>
  * Copyright (c) 2022, Andrew Kaster <akaster@serenityos.org>
- * Copyright (c) 2023, Kenneth Myhra <kennethmyhra@serenityos.org>
+ * Copyright (c) 2023-2024, Kenneth Myhra <kennethmyhra@serenityos.org>
  * Copyright (c) 2023, Idan Horowitz <idan.horowitz@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -31,7 +31,19 @@
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/Serializable.h>
 #include <LibWeb/Bindings/Transferable.h>
+#include <LibWeb/Crypto/CryptoKey.h>
+#include <LibWeb/FileAPI/Blob.h>
+#include <LibWeb/FileAPI/File.h>
+#include <LibWeb/FileAPI/FileList.h>
+#include <LibWeb/Geometry/DOMMatrix.h>
+#include <LibWeb/Geometry/DOMMatrixReadOnly.h>
+#include <LibWeb/Geometry/DOMPoint.h>
+#include <LibWeb/Geometry/DOMPointReadOnly.h>
+#include <LibWeb/Geometry/DOMQuad.h>
+#include <LibWeb/Geometry/DOMRect.h>
+#include <LibWeb/Geometry/DOMRectReadOnly.h>
 #include <LibWeb/HTML/MessagePort.h>
 #include <LibWeb/HTML/StructuredSerialize.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
@@ -105,6 +117,8 @@ enum ValueTag {
 
     ObjectReference,
 
+    SerializableObject,
+
     // TODO: Define many more types
 
     // This tag or higher are understood to be errors
@@ -155,25 +169,23 @@ public:
         auto deep = false;
 
         bool return_primitive_type = true;
-        // 4. If Type(value) is Undefined, Null, Boolean, Number, BigInt, or String, then return { [[Type]]: "primitive", [[Value]]: value }.
+        // 4. If value is undefined, null, a Boolean, a Number, a BigInt, or a String, then return { [[Type]]: "primitive", [[Value]]: value }.
         if (value.is_undefined()) {
-            m_serialized.append(ValueTag::UndefinedPrimitive);
+            serialize_enum(m_serialized, ValueTag::UndefinedPrimitive);
         } else if (value.is_null()) {
-            m_serialized.append(ValueTag::NullPrimitive);
+            serialize_enum(m_serialized, ValueTag::NullPrimitive);
         } else if (value.is_boolean()) {
-            m_serialized.append(ValueTag::BooleanPrimitive);
-            m_serialized.append(static_cast<u32>(value.as_bool()));
+            serialize_enum(m_serialized, ValueTag::BooleanPrimitive);
+            serialize_boolean_primitive(m_serialized, value);
         } else if (value.is_number()) {
-            m_serialized.append(ValueTag::NumberPrimitive);
-            double number = value.as_double();
-            m_serialized.append(bit_cast<u32*>(&number), 2);
+            serialize_enum(m_serialized, ValueTag::NumberPrimitive);
+            serialize_number_primitive(m_serialized, value);
         } else if (value.is_bigint()) {
-            m_serialized.append(ValueTag::BigIntPrimitive);
-            auto& val = value.as_bigint();
-            TRY(serialize_string(m_serialized, TRY_OR_THROW_OOM(m_vm, val.to_string())));
+            serialize_enum(m_serialized, ValueTag::BigIntPrimitive);
+            TRY(serialize_big_int_primitive(m_vm, m_serialized, value));
         } else if (value.is_string()) {
-            m_serialized.append(ValueTag::StringPrimitive);
-            TRY(serialize_string(m_serialized, value.as_string()));
+            serialize_enum(m_serialized, ValueTag::StringPrimitive);
+            TRY(serialize_string_primitive(m_vm, m_serialized, value));
         } else {
             return_primitive_type = false;
         }
@@ -181,78 +193,66 @@ public:
         if (return_primitive_type)
             return m_serialized;
 
-        // 5. If Type(value) is Symbol, then throw a "DataCloneError" DOMException.
+        // 5. If value is a Symbol, then throw a "DataCloneError" DOMException.
         if (value.is_symbol())
-            return WebIDL::DataCloneError::create(*m_vm.current_realm(), "Cannot serialize Symbol"_fly_string);
+            return WebIDL::DataCloneError::create(*m_vm.current_realm(), "Cannot serialize Symbol"_string);
 
         // 6. Let serialized be an uninitialized value.
 
         // 7. If value has a [[BooleanData]] internal slot, then set serialized to { [[Type]]: "Boolean", [[BooleanData]]: value.[[BooleanData]] }.
         if (value.is_object() && is<JS::BooleanObject>(value.as_object())) {
-            m_serialized.append(ValueTag::BooleanObject);
-            auto& boolean_object = static_cast<JS::BooleanObject&>(value.as_object());
-            m_serialized.append(bit_cast<u32>(static_cast<u32>(boolean_object.boolean())));
+            serialize_enum(m_serialized, ValueTag::BooleanObject);
+            serialize_boolean_object(m_serialized, value);
         }
 
         // 8. Otherwise, if value has a [[NumberData]] internal slot, then set serialized to { [[Type]]: "Number", [[NumberData]]: value.[[NumberData]] }.
         else if (value.is_object() && is<JS::NumberObject>(value.as_object())) {
-            m_serialized.append(ValueTag::NumberObject);
-            auto& number_object = static_cast<JS::NumberObject&>(value.as_object());
-            double const number = number_object.number();
-            m_serialized.append(bit_cast<u32*>(&number), 2);
+            serialize_enum(m_serialized, ValueTag::NumberObject);
+            serialize_number_object(m_serialized, value);
         }
 
         // 9. Otherwise, if value has a [[BigIntData]] internal slot, then set serialized to { [[Type]]: "BigInt", [[BigIntData]]: value.[[BigIntData]] }.
         else if (value.is_object() && is<JS::BigIntObject>(value.as_object())) {
-            m_serialized.append(ValueTag::BigIntObject);
-            auto& bigint_object = static_cast<JS::BigIntObject&>(value.as_object());
-            TRY(serialize_string(m_serialized, TRY_OR_THROW_OOM(m_vm, bigint_object.bigint().to_string())));
+            serialize_enum(m_serialized, ValueTag::BigIntObject);
+            TRY(serialize_big_int_object(m_vm, m_serialized, value));
         }
 
         // 10. Otherwise, if value has a [[StringData]] internal slot, then set serialized to { [[Type]]: "String", [[StringData]]: value.[[StringData]] }.
         else if (value.is_object() && is<JS::StringObject>(value.as_object())) {
-            m_serialized.append(ValueTag::StringObject);
-            auto& string_object = static_cast<JS::StringObject&>(value.as_object());
-            TRY(serialize_string(m_serialized, string_object.primitive_string()));
+            serialize_enum(m_serialized, ValueTag::StringObject);
+            TRY(serialize_string_object(m_vm, m_serialized, value));
         }
 
         // 11. Otherwise, if value has a [[DateValue]] internal slot, then set serialized to { [[Type]]: "Date", [[DateValue]]: value.[[DateValue]] }.
         else if (value.is_object() && is<JS::Date>(value.as_object())) {
-            m_serialized.append(ValueTag::DateObject);
-            auto& date_object = static_cast<JS::Date&>(value.as_object());
-            double const date_value = date_object.date_value();
-            m_serialized.append(bit_cast<u32*>(&date_value), 2);
+            serialize_enum(m_serialized, ValueTag::DateObject);
+            serialize_date_object(m_serialized, value);
         }
 
         // 12. Otherwise, if value has a [[RegExpMatcher]] internal slot, then set serialized to
         //     { [[Type]]: "RegExp", [[RegExpMatcher]]: value.[[RegExpMatcher]], [[OriginalSource]]: value.[[OriginalSource]],
         //       [[OriginalFlags]]: value.[[OriginalFlags]] }.
         else if (value.is_object() && is<JS::RegExpObject>(value.as_object())) {
-            m_serialized.append(ValueTag::RegExpObject);
-            auto& regexp_object = static_cast<JS::RegExpObject&>(value.as_object());
-            // Note: A Regex<ECMA262> object is perfectly happy to be reconstructed with just the source+flags
-            //       In the future, we could optimize the work being done on the deserialize step by serializing
-            //       more of the internal state (the [[RegExpMatcher]] internal slot)
-            TRY(serialize_string(m_serialized, TRY_OR_THROW_OOM(m_vm, String::from_byte_string(regexp_object.pattern()))));
-            TRY(serialize_string(m_serialized, TRY_OR_THROW_OOM(m_vm, String::from_byte_string(regexp_object.flags()))));
+            serialize_enum(m_serialized, ValueTag::RegExpObject);
+            TRY(serialize_reg_exp_object(m_vm, m_serialized, value));
         }
 
         // 13. Otherwise, if value has an [[ArrayBufferData]] internal slot, then:
         else if (value.is_object() && is<JS::ArrayBuffer>(value.as_object())) {
-            TRY(serialize_array_buffer(m_serialized, static_cast<JS::ArrayBuffer&>(value.as_object())));
+            TRY(serialize_array_buffer(m_vm, m_serialized, static_cast<JS::ArrayBuffer&>(value.as_object()), m_for_storage));
         }
 
         // 14. Otherwise, if value has a [[ViewedArrayBuffer]] internal slot, then:
         else if (value.is_object() && is<JS::TypedArrayBase>(value.as_object())) {
-            TRY(serialize_viewed_array_buffer(m_serialized, static_cast<JS::TypedArrayBase&>(value.as_object())));
+            TRY(serialize_viewed_array_buffer(m_vm, m_serialized, static_cast<JS::TypedArrayBase&>(value.as_object()), m_for_storage, m_memory));
         } else if (value.is_object() && is<JS::DataView>(value.as_object())) {
-            TRY(serialize_viewed_array_buffer(m_serialized, static_cast<JS::DataView&>(value.as_object())));
+            TRY(serialize_viewed_array_buffer(m_vm, m_serialized, static_cast<JS::DataView&>(value.as_object()), m_for_storage, m_memory));
         }
 
         // 15. Otherwise, if value has [[MapData]] internal slot, then:
         else if (value.is_object() && is<JS::Map>(value.as_object())) {
             // 1. Set serialized to { [[Type]]: "Map", [[MapData]]: a new empty List }.
-            m_serialized.append(ValueTag::MapObject);
+            serialize_enum(m_serialized, ValueTag::MapObject);
             // 2. Set deep to true.
             deep = true;
         }
@@ -260,7 +260,7 @@ public:
         // 16. Otherwise, if value has [[SetData]] internal slot, then:
         else if (value.is_object() && is<JS::Set>(value.as_object())) {
             // 1. Set serialized to { [[Type]]: "Set", [[SetData]]: a new empty List }.
-            m_serialized.append(ValueTag::SetObject);
+            serialize_enum(m_serialized, ValueTag::SetObject);
             // 2. Set deep to true.
             deep = true;
         }
@@ -287,11 +287,11 @@ public:
 
             // 5. Set serialized to { [[Type]]: "Error", [[Name]]: name, [[Message]]: message }.
             // FIXME: 6. User agents should attach a serialized representation of any interesting accompanying data which are not yet specified, notably the stack property, to serialized.
-            m_serialized.append(ValueTag::ErrorObject);
-            m_serialized.append(type);
-            m_serialized.append(message.has_value());
+            serialize_enum(m_serialized, ValueTag::ErrorObject);
+            serialize_enum(m_serialized, type);
+            serialize_primitive_type(m_serialized, message.has_value());
             if (message.has_value())
-                TRY(serialize_string(m_serialized, *message));
+                TRY(serialize_string(m_vm, m_serialized, *message));
         }
 
         // 18. Otherwise, if value is an Array exotic object, then:
@@ -302,23 +302,36 @@ public:
             u64 length = MUST(JS::length_of_array_like(m_vm, value.as_object()));
 
             // 3. Set serialized to { [[Type]]: "Array", [[Length]]: valueLen, [[Properties]]: a new empty List }.
-            m_serialized.append(ValueTag::ArrayObject);
-            m_serialized.append(bit_cast<u32*>(&length), 2);
+            serialize_enum(m_serialized, ValueTag::ArrayObject);
+            serialize_primitive_type(m_serialized, length);
 
             // 4. Set deep to true.
             deep = true;
         }
 
-        // FIXME: 19. Otherwise, if value is a platform object that is a serializable object:
+        // 19. Otherwise, if value is a platform object that is a serializable object:
+        else if (value.is_object() && is<Bindings::Serializable>(value.as_object())) {
+            auto& serializable = dynamic_cast<Bindings::Serializable&>(value.as_object());
+
+            // FIXME: 1. If value has a [[Detached]] internal slot whose value is true, then throw a "DataCloneError" DOMException.
+
+            // 2. Let typeString be the identifier of the primary interface of value.
+            // 3. Set serialized to { [[Type]]: typeString }.
+            serialize_enum(m_serialized, ValueTag::SerializableObject);
+            TRY(serialize_string(m_vm, m_serialized, serializable.interface_name()));
+
+            // 4. Set deep to true
+            deep = true;
+        }
 
         // 20. Otherwise, if value is a platform object, then throw a "DataCloneError" DOMException.
         else if (value.is_object() && is<Bindings::PlatformObject>(value.as_object())) {
-            return throw_completion(WebIDL::DataCloneError::create(*m_vm.current_realm(), "Cannot serialize platform objects"_fly_string));
+            return throw_completion(WebIDL::DataCloneError::create(*m_vm.current_realm(), "Cannot serialize platform objects"_string));
         }
 
         // 21. Otherwise, if IsCallable(value) is true, then throw a "DataCloneError" DOMException.
         else if (value.is_function()) {
-            return throw_completion(WebIDL::DataCloneError::create(*m_vm.current_realm(), "Cannot serialize functions"_fly_string));
+            return throw_completion(WebIDL::DataCloneError::create(*m_vm.current_realm(), "Cannot serialize functions"_string));
         }
 
         // FIXME: 22. Otherwise, if value has any internal slot other than [[Prototype]] or [[Extensible]], then throw a "DataCloneError" DOMException.
@@ -328,7 +341,7 @@ public:
         // 24. Otherwise:
         else {
             // 1. Set serialized to { [[Type]]: "Object", [[Properties]]: a new empty List }.
-            m_serialized.append(ValueTag::Object);
+            serialize_enum(m_serialized, ValueTag::Object);
 
             // 2. Set deep to true.
             deep = true;
@@ -376,8 +389,7 @@ public:
                     // 1. If entry is not the special value empty, append entry to copiedList.
                     copied_list.append(entry.key);
                 }
-                u64 size = set.set_size();
-                m_serialized.append(bit_cast<u32*>(&size), 2);
+                serialize_primitive_type(m_serialized, set.set_size());
                 // 3. For each entry of copiedList:
                 for (auto copied_value : copied_list) {
                     // 1. Let serializedEntry be ? StructuredSerializeInternal(entry, forStorage, memory).
@@ -388,13 +400,17 @@ public:
                 }
             }
 
-            // FIXME: 3. Otherwise, if value is a platform object that is a serializable object, then perform the serialization steps for value's primary interface, given value, serialized, and forStorage.
+            // 3. Otherwise, if value is a platform object that is a serializable object, then perform the serialization steps for value's primary interface, given value, serialized, and forStorage.
+            else if (value.is_object() && is<Bindings::Serializable>(value.as_object())) {
+                auto& serializable = dynamic_cast<Bindings::Serializable&>(value.as_object());
+                TRY(serializable.serialization_steps(m_serialized, m_for_storage, m_memory));
+            }
 
             // 4. Otherwise, for each key in ! EnumerableOwnProperties(value, key):
             else {
                 u64 property_count = 0;
                 auto count_offset = m_serialized.size();
-                m_serialized.append(bit_cast<u32*>(&property_count), 2);
+                serialize_primitive_type(m_serialized, property_count);
                 for (auto key : MUST(value.as_object().enumerable_own_property_names(JS::Object::PropertyKind::Key))) {
                     auto property_key = MUST(JS::PropertyKey::from_value(m_vm, key));
 
@@ -407,7 +423,7 @@ public:
                         auto output_value = TRY(structured_serialize_internal(m_vm, input_value, m_for_storage, m_memory));
 
                         // 3. Append { [[Key]]: key, [[Value]]: outputValue } to serialized.[[Properties]].
-                        TRY(serialize_string(m_serialized, key.as_string()));
+                        TRY(serialize_string(m_vm, m_serialized, key.as_string()));
                         m_serialized.extend(output_value);
 
                         property_count++;
@@ -427,170 +443,251 @@ private:
     u32 m_next_id { 0 };
     SerializationRecord m_serialized;
     bool m_for_storage { false };
-
-    WebIDL::ExceptionOr<void> serialize_bytes(Vector<u32>& vector, ReadonlyBytes bytes)
-    {
-        // Append size of the buffer to the serialized structure.
-        u64 const size = bytes.size();
-        TRY_OR_THROW_OOM(m_vm, vector.try_append(bit_cast<u32*>(&size), 2));
-        // Append the bytes of the buffer to the serialized structure.
-        u64 byte_position = 0;
-        while (byte_position < size) {
-            u32 combined_value = 0;
-            for (u8 i = 0; i < 4; ++i) {
-                u8 const byte = bytes[byte_position];
-                combined_value |= byte << (i * 8);
-                byte_position++;
-                if (byte_position == size)
-                    break;
-            }
-            TRY_OR_THROW_OOM(m_vm, vector.try_append(combined_value));
-        }
-        return {};
-    }
-
-    WebIDL::ExceptionOr<void> serialize_string(Vector<u32>& vector, DeprecatedFlyString const& string)
-    {
-        return serialize_bytes(vector, string.view().bytes());
-    }
-
-    WebIDL::ExceptionOr<void> serialize_string(Vector<u32>& vector, String const& string)
-    {
-        return serialize_bytes(vector, { string.code_points().bytes(), string.code_points().byte_length() });
-    }
-
-    WebIDL::ExceptionOr<void> serialize_string(Vector<u32>& vector, JS::PrimitiveString const& primitive_string)
-    {
-        auto string = primitive_string.utf8_string();
-        TRY(serialize_string(vector, string));
-        return {};
-    }
-
-    WebIDL::ExceptionOr<void> serialize_array_buffer(Vector<u32>& vector, JS::ArrayBuffer const& array_buffer)
-    {
-        // 13. Otherwise, if value has an [[ArrayBufferData]] internal slot, then:
-
-        // FIXME: 1.  If IsSharedArrayBuffer(value) is true, then:
-        if (false) {
-            // 1. If the current settings object's cross-origin isolated capability is false, then throw a "DataCloneError" DOMException.
-            // NOTE: This check is only needed when serializing (and not when deserializing) as the cross-origin isolated capability cannot change
-            //       over time and a SharedArrayBuffer cannot leave an agent cluster.
-            if (current_settings_object().cross_origin_isolated_capability() == CanUseCrossOriginIsolatedAPIs::No)
-                return WebIDL::DataCloneError::create(*m_vm.current_realm(), "Cannot serialize SharedArrayBuffer when cross-origin isolated"_fly_string);
-
-            // 2. If forStorage is true, then throw a "DataCloneError" DOMException.
-            if (m_for_storage)
-                return WebIDL::DataCloneError::create(*m_vm.current_realm(), "Cannot serialize SharedArrayBuffer for storage"_fly_string);
-
-            // FIXME: 3. If value has an [[ArrayBufferMaxByteLength]] internal slot, then set serialized to { [[Type]]: "GrowableSharedArrayBuffer",
-            //           [[ArrayBufferData]]: value.[[ArrayBufferData]], [[ArrayBufferByteLengthData]]: value.[[ArrayBufferByteLengthData]],
-            //           [[ArrayBufferMaxByteLength]]: value.[[ArrayBufferMaxByteLength]], [[AgentCluster]]: the surrounding agent's agent cluster }.
-            // FIXME: 4. Otherwise, set serialized to { [[Type]]: "SharedArrayBuffer", [[ArrayBufferData]]: value.[[ArrayBufferData]],
-            //           [[ArrayBufferByteLength]]: value.[[ArrayBufferByteLength]], [[AgentCluster]]: the surrounding agent's agent cluster }.
-        }
-        // 2. Otherwise:
-        else {
-            // 1. If IsDetachedBuffer(value) is true, then throw a "DataCloneError" DOMException.
-            if (array_buffer.is_detached())
-                return WebIDL::DataCloneError::create(*m_vm.current_realm(), "Cannot serialize detached ArrayBuffer"_fly_string);
-
-            // 2. Let size be value.[[ArrayBufferByteLength]].
-            auto size = array_buffer.byte_length();
-
-            // 3. Let dataCopy be ? CreateByteDataBlock(size).
-            //    NOTE: This can throw a RangeError exception upon allocation failure.
-            auto data_copy = TRY(JS::create_byte_data_block(m_vm, size));
-
-            // 4. Perform CopyDataBlockBytes(dataCopy, 0, value.[[ArrayBufferData]], 0, size).
-            JS::copy_data_block_bytes(data_copy.buffer(), 0, array_buffer.buffer(), 0, size);
-
-            // FIXME: 5. If value has an [[ArrayBufferMaxByteLength]] internal slot, then set serialized to { [[Type]]: "ResizableArrayBuffer",
-            //    [[ArrayBufferData]]: dataCopy, [[ArrayBufferByteLength]]: size, [[ArrayBufferMaxByteLength]]: value.[[ArrayBufferMaxByteLength]] }.
-            if (false) {
-            }
-            // 6. Otherwise, set serialized to { [[Type]]: "ArrayBuffer", [[ArrayBufferData]]: dataCopy, [[ArrayBufferByteLength]]: size }.
-            else {
-                vector.append(ValueTag::ArrayBuffer);
-                TRY(serialize_bytes(vector, data_copy.buffer().bytes()));
-            }
-        }
-        return {};
-    }
-
-    template<OneOf<JS::TypedArrayBase, JS::DataView> ViewType>
-    WebIDL::ExceptionOr<void> serialize_viewed_array_buffer(Vector<u32>& vector, ViewType const& view)
-    {
-        // 14. Otherwise, if value has a [[ViewedArrayBuffer]] internal slot, then:
-
-        auto view_record = [&]() {
-            if constexpr (IsSame<ViewType, JS::DataView>) {
-                return JS::make_data_view_with_buffer_witness_record(view, JS::ArrayBuffer::Order::SeqCst);
-            } else {
-                return JS::make_typed_array_with_buffer_witness_record(view, JS::ArrayBuffer::Order::SeqCst);
-            }
-        }();
-
-        // 1. If IsArrayBufferViewOutOfBounds(value) is true, then throw a "DataCloneError" DOMException.
-        if constexpr (IsSame<ViewType, JS::DataView>) {
-            if (JS::is_view_out_of_bounds(view_record))
-                return WebIDL::DataCloneError::create(*m_vm.current_realm(), MUST(String::formatted(JS::ErrorType::BufferOutOfBounds.message(), "DataView"sv)));
-        } else {
-            if (JS::is_typed_array_out_of_bounds(view_record))
-                return WebIDL::DataCloneError::create(*m_vm.current_realm(), MUST(String::formatted(JS::ErrorType::BufferOutOfBounds.message(), "TypedArray"sv)));
-        }
-
-        // 2. Let buffer be the value of value's [[ViewedArrayBuffer]] internal slot.
-        auto* buffer = view.viewed_array_buffer();
-
-        // 3. Let bufferSerialized be ? StructuredSerializeInternal(buffer, forStorage, memory).
-        auto buffer_serialized = TRY(structured_serialize_internal(m_vm, JS::Value(buffer), m_for_storage, m_memory));
-
-        // 4. Assert: bufferSerialized.[[Type]] is "ArrayBuffer", "ResizableArrayBuffer", "SharedArrayBuffer", or "GrowableSharedArrayBuffer".
-        // NOTE: We currently only implement this for ArrayBuffer
-        VERIFY(buffer_serialized[0] == ValueTag::ArrayBuffer);
-
-        // 5. If value has a [[DataView]] internal slot, then set serialized to { [[Type]]: "ArrayBufferView", [[Constructor]]: "DataView",
-        //    [[ArrayBufferSerialized]]: bufferSerialized, [[ByteLength]]: value.[[ByteLength]], [[ByteOffset]]: value.[[ByteOffset]] }.
-        if constexpr (IsSame<ViewType, JS::DataView>) {
-            vector.append(ValueTag::ArrayBufferView);
-            vector.extend(move(buffer_serialized));           // [[ArrayBufferSerialized]]
-            TRY(serialize_string(vector, "DataView"_string)); // [[Constructor]]
-            vector.append(JS::get_view_byte_length(view_record));
-            vector.append(view.byte_offset());
-        }
-
-        // 6. Otherwise:
-        else {
-            // 1. Assert: value has a [[TypedArrayName]] internal slot.
-            //    NOTE: Handled by constexpr check and template constraints
-            // 2. Set serialized to { [[Type]]: "ArrayBufferView", [[Constructor]]: value.[[TypedArrayName]],
-            //    [[ArrayBufferSerialized]]: bufferSerialized, [[ByteLength]]: value.[[ByteLength]],
-            //    [[ByteOffset]]: value.[[ByteOffset]], [[ArrayLength]]: value.[[ArrayLength]] }.
-            vector.append(ValueTag::ArrayBufferView);
-            vector.extend(move(buffer_serialized));             // [[ArrayBufferSerialized]]
-            TRY(serialize_string(vector, view.element_name())); // [[Constructor]]
-            vector.append(JS::typed_array_byte_length(view_record));
-            vector.append(view.byte_offset());
-            vector.append(JS::typed_array_length(view_record));
-        }
-        return {};
-    }
 };
+
+void serialize_boolean_primitive(SerializationRecord& serialized, JS::Value& value)
+{
+    VERIFY(value.is_boolean());
+    serialize_primitive_type(serialized, value.as_bool());
+}
+
+void serialize_number_primitive(SerializationRecord& serialized, JS::Value& value)
+{
+    VERIFY(value.is_number());
+    serialize_primitive_type(serialized, value.as_double());
+}
+
+WebIDL::ExceptionOr<void> serialize_big_int_primitive(JS::VM& vm, SerializationRecord& serialized, JS::Value& value)
+{
+    VERIFY(value.is_bigint());
+    auto& val = value.as_bigint();
+    TRY(serialize_string(vm, serialized, TRY_OR_THROW_OOM(vm, val.to_string())));
+    return {};
+}
+
+WebIDL::ExceptionOr<void> serialize_string_primitive(JS::VM& vm, SerializationRecord& serialized, JS::Value& value)
+{
+    VERIFY(value.is_string());
+    TRY(serialize_string(vm, serialized, value.as_string()));
+    return {};
+}
+
+void serialize_boolean_object(SerializationRecord& serialized, JS::Value& value)
+{
+    VERIFY(value.is_object() && is<JS::BooleanObject>(value.as_object()));
+    auto& boolean_object = static_cast<JS::BooleanObject&>(value.as_object());
+    serialize_primitive_type(serialized, boolean_object.boolean());
+}
+
+void serialize_number_object(SerializationRecord& serialized, JS::Value& value)
+{
+    VERIFY(value.is_object() && is<JS::NumberObject>(value.as_object()));
+    auto& number_object = static_cast<JS::NumberObject&>(value.as_object());
+    serialize_primitive_type(serialized, number_object.number());
+}
+
+WebIDL::ExceptionOr<void> serialize_big_int_object(JS::VM& vm, SerializationRecord& serialized, JS::Value& value)
+{
+    VERIFY(value.is_object() && is<JS::BigIntObject>(value.as_object()));
+    auto& bigint_object = static_cast<JS::BigIntObject&>(value.as_object());
+    TRY(serialize_string(vm, serialized, TRY_OR_THROW_OOM(vm, bigint_object.bigint().to_string())));
+    return {};
+}
+
+WebIDL::ExceptionOr<void> serialize_string_object(JS::VM& vm, SerializationRecord& serialized, JS::Value& value)
+{
+    VERIFY(value.is_object() && is<JS::StringObject>(value.as_object()));
+    auto& string_object = static_cast<JS::StringObject&>(value.as_object());
+    TRY(serialize_string(vm, serialized, string_object.primitive_string()));
+    return {};
+}
+
+void serialize_date_object(SerializationRecord& serialized, JS::Value& value)
+{
+    VERIFY(value.is_object() && is<JS::Date>(value.as_object()));
+    auto& date_object = static_cast<JS::Date&>(value.as_object());
+    serialize_primitive_type(serialized, date_object.date_value());
+}
+
+WebIDL::ExceptionOr<void> serialize_reg_exp_object(JS::VM& vm, SerializationRecord& serialized, JS::Value& value)
+{
+    VERIFY(value.is_object() && is<JS::RegExpObject>(value.as_object()));
+    auto& regexp_object = static_cast<JS::RegExpObject&>(value.as_object());
+    // Note: A Regex<ECMA262> object is perfectly happy to be reconstructed with just the source+flags
+    //       In the future, we could optimize the work being done on the deserialize step by serializing
+    //       more of the internal state (the [[RegExpMatcher]] internal slot)
+    TRY(serialize_string(vm, serialized, TRY_OR_THROW_OOM(vm, String::from_byte_string(regexp_object.pattern()))));
+    TRY(serialize_string(vm, serialized, TRY_OR_THROW_OOM(vm, String::from_byte_string(regexp_object.flags()))));
+    return {};
+}
+
+WebIDL::ExceptionOr<void> serialize_bytes(JS::VM& vm, Vector<u32>& vector, ReadonlyBytes bytes)
+{
+    // Append size of the buffer to the serialized structure.
+    u64 const size = bytes.size();
+    serialize_primitive_type(vector, size);
+    // Append the bytes of the buffer to the serialized structure.
+    u64 byte_position = 0;
+    while (byte_position < size) {
+        u32 combined_value = 0;
+        for (u8 i = 0; i < 4; ++i) {
+            u8 const byte = bytes[byte_position];
+            combined_value |= byte << (i * 8);
+            byte_position++;
+            if (byte_position == size)
+                break;
+        }
+        TRY_OR_THROW_OOM(vm, vector.try_append(combined_value));
+    }
+    return {};
+}
+
+WebIDL::ExceptionOr<void> serialize_string(JS::VM& vm, Vector<u32>& vector, DeprecatedFlyString const& string)
+{
+    return serialize_bytes(vm, vector, string.view().bytes());
+}
+
+WebIDL::ExceptionOr<void> serialize_string(JS::VM& vm, Vector<u32>& vector, String const& string)
+{
+    return serialize_bytes(vm, vector, { string.code_points().bytes(), string.code_points().byte_length() });
+}
+
+WebIDL::ExceptionOr<void> serialize_string(JS::VM& vm, Vector<u32>& vector, JS::PrimitiveString const& primitive_string)
+{
+    auto string = primitive_string.utf8_string();
+    TRY(serialize_string(vm, vector, string));
+    return {};
+}
+
+WebIDL::ExceptionOr<void> serialize_array_buffer(JS::VM& vm, Vector<u32>& vector, JS::ArrayBuffer const& array_buffer, bool for_storage)
+{
+    // 13. Otherwise, if value has an [[ArrayBufferData]] internal slot, then:
+
+    // FIXME: 1.  If IsSharedArrayBuffer(value) is true, then:
+    if (false) {
+        // 1. If the current settings object's cross-origin isolated capability is false, then throw a "DataCloneError" DOMException.
+        // NOTE: This check is only needed when serializing (and not when deserializing) as the cross-origin isolated capability cannot change
+        //       over time and a SharedArrayBuffer cannot leave an agent cluster.
+        if (current_settings_object().cross_origin_isolated_capability() == CanUseCrossOriginIsolatedAPIs::No)
+            return WebIDL::DataCloneError::create(*vm.current_realm(), "Cannot serialize SharedArrayBuffer when cross-origin isolated"_string);
+
+        // 2. If forStorage is true, then throw a "DataCloneError" DOMException.
+        if (for_storage)
+            return WebIDL::DataCloneError::create(*vm.current_realm(), "Cannot serialize SharedArrayBuffer for storage"_string);
+
+        // FIXME: 3. If value has an [[ArrayBufferMaxByteLength]] internal slot, then set serialized to { [[Type]]: "GrowableSharedArrayBuffer",
+        //           [[ArrayBufferData]]: value.[[ArrayBufferData]], [[ArrayBufferByteLengthData]]: value.[[ArrayBufferByteLengthData]],
+        //           [[ArrayBufferMaxByteLength]]: value.[[ArrayBufferMaxByteLength]], [[AgentCluster]]: the surrounding agent's agent cluster }.
+        // FIXME: 4. Otherwise, set serialized to { [[Type]]: "SharedArrayBuffer", [[ArrayBufferData]]: value.[[ArrayBufferData]],
+        //           [[ArrayBufferByteLength]]: value.[[ArrayBufferByteLength]], [[AgentCluster]]: the surrounding agent's agent cluster }.
+    }
+    // 2. Otherwise:
+    else {
+        // 1. If IsDetachedBuffer(value) is true, then throw a "DataCloneError" DOMException.
+        if (array_buffer.is_detached())
+            return WebIDL::DataCloneError::create(*vm.current_realm(), "Cannot serialize detached ArrayBuffer"_string);
+
+        // 2. Let size be value.[[ArrayBufferByteLength]].
+        auto size = array_buffer.byte_length();
+
+        // 3. Let dataCopy be ? CreateByteDataBlock(size).
+        //    NOTE: This can throw a RangeError exception upon allocation failure.
+        auto data_copy = TRY(JS::create_byte_data_block(vm, size));
+
+        // 4. Perform CopyDataBlockBytes(dataCopy, 0, value.[[ArrayBufferData]], 0, size).
+        JS::copy_data_block_bytes(data_copy.buffer(), 0, array_buffer.buffer(), 0, size);
+
+        // FIXME: 5. If value has an [[ArrayBufferMaxByteLength]] internal slot, then set serialized to { [[Type]]: "ResizableArrayBuffer",
+        //    [[ArrayBufferData]]: dataCopy, [[ArrayBufferByteLength]]: size, [[ArrayBufferMaxByteLength]]: value.[[ArrayBufferMaxByteLength]] }.
+        if (false) {
+        }
+        // 6. Otherwise, set serialized to { [[Type]]: "ArrayBuffer", [[ArrayBufferData]]: dataCopy, [[ArrayBufferByteLength]]: size }.
+        else {
+            serialize_enum(vector, ValueTag::ArrayBuffer);
+            TRY(serialize_bytes(vm, vector, data_copy.buffer().bytes()));
+        }
+    }
+    return {};
+}
+
+template<OneOf<JS::TypedArrayBase, JS::DataView> ViewType>
+WebIDL::ExceptionOr<void> serialize_viewed_array_buffer(JS::VM& vm, Vector<u32>& vector, ViewType const& view, bool for_storage, SerializationMemory& memory)
+{
+    // 14. Otherwise, if value has a [[ViewedArrayBuffer]] internal slot, then:
+
+    auto view_record = [&]() {
+        if constexpr (IsSame<ViewType, JS::DataView>) {
+            return JS::make_data_view_with_buffer_witness_record(view, JS::ArrayBuffer::Order::SeqCst);
+        } else {
+            return JS::make_typed_array_with_buffer_witness_record(view, JS::ArrayBuffer::Order::SeqCst);
+        }
+    }();
+
+    // 1. If IsArrayBufferViewOutOfBounds(value) is true, then throw a "DataCloneError" DOMException.
+    if constexpr (IsSame<ViewType, JS::DataView>) {
+        if (JS::is_view_out_of_bounds(view_record))
+            return WebIDL::DataCloneError::create(*vm.current_realm(), MUST(String::formatted(JS::ErrorType::BufferOutOfBounds.message(), "DataView"sv)));
+    } else {
+        if (JS::is_typed_array_out_of_bounds(view_record))
+            return WebIDL::DataCloneError::create(*vm.current_realm(), MUST(String::formatted(JS::ErrorType::BufferOutOfBounds.message(), "TypedArray"sv)));
+    }
+
+    // 2. Let buffer be the value of value's [[ViewedArrayBuffer]] internal slot.
+    auto* buffer = view.viewed_array_buffer();
+
+    // 3. Let bufferSerialized be ? StructuredSerializeInternal(buffer, forStorage, memory).
+    auto buffer_serialized = TRY(structured_serialize_internal(vm, JS::Value(buffer), for_storage, memory));
+
+    // 4. Assert: bufferSerialized.[[Type]] is "ArrayBuffer", "ResizableArrayBuffer", "SharedArrayBuffer", or "GrowableSharedArrayBuffer".
+    // NOTE: We currently only implement this for ArrayBuffer
+    VERIFY(buffer_serialized[0] == ValueTag::ArrayBuffer);
+
+    // 5. If value has a [[DataView]] internal slot, then set serialized to { [[Type]]: "ArrayBufferView", [[Constructor]]: "DataView",
+    //    [[ArrayBufferSerialized]]: bufferSerialized, [[ByteLength]]: value.[[ByteLength]], [[ByteOffset]]: value.[[ByteOffset]] }.
+    if constexpr (IsSame<ViewType, JS::DataView>) {
+        serialize_enum(vector, ValueTag::ArrayBufferView);
+        vector.extend(move(buffer_serialized));               // [[ArrayBufferSerialized]]
+        TRY(serialize_string(vm, vector, "DataView"_string)); // [[Constructor]]
+        serialize_primitive_type(vector, JS::get_view_byte_length(view_record));
+        serialize_primitive_type(vector, view.byte_offset());
+    }
+
+    // 6. Otherwise:
+    else {
+        // 1. Assert: value has a [[TypedArrayName]] internal slot.
+        //    NOTE: Handled by constexpr check and template constraints
+        // 2. Set serialized to { [[Type]]: "ArrayBufferView", [[Constructor]]: value.[[TypedArrayName]],
+        //    [[ArrayBufferSerialized]]: bufferSerialized, [[ByteLength]]: value.[[ByteLength]],
+        //    [[ByteOffset]]: value.[[ByteOffset]], [[ArrayLength]]: value.[[ArrayLength]] }.
+        serialize_enum(vector, ValueTag::ArrayBufferView);
+        vector.extend(move(buffer_serialized));                 // [[ArrayBufferSerialized]]
+        TRY(serialize_string(vm, vector, view.element_name())); // [[Constructor]]
+        serialize_primitive_type(vector, JS::typed_array_byte_length(view_record));
+        serialize_primitive_type(vector, view.byte_offset());
+        serialize_primitive_type(vector, JS::typed_array_length(view_record));
+    }
+    return {};
+}
+template WebIDL::ExceptionOr<void> serialize_viewed_array_buffer(JS::VM& vm, Vector<u32>& vector, JS::TypedArrayBase const& view, bool for_storage, SerializationMemory& memory);
+template WebIDL::ExceptionOr<void> serialize_viewed_array_buffer(JS::VM& vm, Vector<u32>& vector, JS::DataView const& view, bool for_storage, SerializationMemory& memory);
 
 class Deserializer {
 public:
-    Deserializer(JS::VM& vm, JS::Realm& target_realm, ReadonlySpan<u32> serialized, DeserializationMemory& memory)
+    Deserializer(JS::VM& vm, JS::Realm& target_realm, ReadonlySpan<u32> serialized, DeserializationMemory& memory, Optional<size_t> position = {})
         : m_vm(vm)
         , m_serialized(serialized)
         , m_memory(memory)
+        , m_position(position.value_or(0))
     {
         VERIFY(vm.current_realm() == &target_realm);
     }
 
+    size_t position() const { return m_position; }
+
     // https://html.spec.whatwg.org/multipage/structured-data.html#structureddeserialize
     WebIDL::ExceptionOr<JS::Value> deserialize()
     {
-        auto tag = m_serialized[m_position++];
+        auto tag = deserialize_primitive_type<ValueTag>(m_serialized, m_position);
 
         // 2. If memory[serialized] exists, then return memory[serialized].
         if (tag == ValueTag::ObjectReference) {
@@ -621,16 +718,12 @@ public:
             break;
         }
         case ValueTag::BooleanPrimitive: {
-            value = JS::Value(static_cast<bool>(m_serialized[m_position++]));
+            value = JS::Value { deserialize_boolean_primitive(m_serialized, m_position) };
             is_primitive = true;
             break;
         }
         case ValueTag::NumberPrimitive: {
-            u32 bits[2] = {};
-            bits[0] = m_serialized[m_position++];
-            bits[1] = m_serialized[m_position++];
-            auto double_value = *bit_cast<double*>(&bits);
-            value = JS::Value(double_value);
+            value = JS::Value { deserialize_number_primitive(m_serialized, m_position) };
             is_primitive = true;
             break;
         }
@@ -648,51 +741,33 @@ public:
         }
         // 6. Otherwise, if serialized.[[Type]] is "Boolean", then set value to a new Boolean object in targetRealm whose [[BooleanData]] internal slot value is serialized.[[BooleanData]].
         case BooleanObject: {
-            auto* realm = m_vm.current_realm();
-            auto bool_value = static_cast<bool>(m_serialized[m_position++]);
-            value = JS::BooleanObject::create(*realm, bool_value);
+            value = deserialize_boolean_object(*m_vm.current_realm(), m_serialized, m_position);
             break;
         }
         // 7. Otherwise, if serialized.[[Type]] is "Number", then set value to a new Number object in targetRealm whose [[NumberData]] internal slot value is serialized.[[NumberData]].
         case ValueTag::NumberObject: {
-            auto* realm = m_vm.current_realm();
-            u32 bits[2];
-            bits[0] = m_serialized[m_position++];
-            bits[1] = m_serialized[m_position++];
-            auto double_value = *bit_cast<double*>(&bits);
-            value = JS::NumberObject::create(*realm, double_value);
+            value = deserialize_number_object(*m_vm.current_realm(), m_serialized, m_position);
             break;
         }
         // 8. Otherwise, if serialized.[[Type]] is "BigInt", then set value to a new BigInt object in targetRealm whose [[BigIntData]] internal slot value is serialized.[[BigIntData]].
         case ValueTag::BigIntObject: {
-            auto* realm = m_vm.current_realm();
-            auto big_int = TRY(deserialize_big_int_primitive(m_vm, m_serialized, m_position));
-            value = JS::BigIntObject::create(*realm, big_int);
+            value = TRY(deserialize_big_int_object(*m_vm.current_realm(), m_serialized, m_position));
             break;
         }
         // 9. Otherwise, if serialized.[[Type]] is "String", then set value to a new String object in targetRealm whose [[StringData]] internal slot value is serialized.[[StringData]].
         case ValueTag::StringObject: {
-            auto* realm = m_vm.current_realm();
-            auto string = TRY(deserialize_string_primitive(m_vm, m_serialized, m_position));
-            value = JS::StringObject::create(*realm, string, realm->intrinsics().string_prototype());
+            value = TRY(deserialize_string_object(*m_vm.current_realm(), m_serialized, m_position));
             break;
         }
         // 10. Otherwise, if serialized.[[Type]] is "Date", then set value to a new Date object in targetRealm whose [[DateValue]] internal slot value is serialized.[[DateValue]].
         case ValueTag::DateObject: {
-            auto* realm = m_vm.current_realm();
-            u32 bits[2];
-            bits[0] = m_serialized[m_position++];
-            bits[1] = m_serialized[m_position++];
-            auto double_value = *bit_cast<double*>(&bits);
-            value = JS::Date::create(*realm, double_value);
+            value = deserialize_date_object(*m_vm.current_realm(), m_serialized, m_position);
             break;
         }
         // 11. Otherwise, if serialized.[[Type]] is "RegExp", then set value to a new RegExp object in targetRealm whose [[RegExpMatcher]] internal slot value is serialized.[[RegExpMatcher]],
         //     whose [[OriginalSource]] internal slot value is serialized.[[OriginalSource]], and whose [[OriginalFlags]] internal slot value is serialized.[[OriginalFlags]].
         case ValueTag::RegExpObject: {
-            auto pattern = TRY(deserialize_string_primitive(m_vm, m_serialized, m_position));
-            auto flags = TRY(deserialize_string_primitive(m_vm, m_serialized, m_position));
-            value = TRY(JS::regexp_create(m_vm, move(pattern), move(flags)));
+            value = TRY(deserialize_reg_exp_object(*m_vm.current_realm(), m_serialized, m_position));
             break;
         }
         // FIXME: 12. Otherwise, if serialized.[[Type]] is "SharedArrayBuffer", then:
@@ -703,7 +778,7 @@ public:
             // If this throws an exception, catch it, and then throw a "DataCloneError" DOMException.
             auto bytes_or_error = deserialize_bytes(m_vm, m_serialized, m_position);
             if (bytes_or_error.is_error())
-                return WebIDL::DataCloneError::create(*m_vm.current_realm(), "out of memory"_fly_string);
+                return WebIDL::DataCloneError::create(*m_vm.current_realm(), "out of memory"_string);
             value = JS::ArrayBuffer::create(*realm, bytes_or_error.release_value());
             break;
         }
@@ -714,13 +789,13 @@ public:
             auto array_buffer_value = TRY(deserialize());
             auto& array_buffer = verify_cast<JS::ArrayBuffer>(array_buffer_value.as_object());
             auto constructor_name = TRY(deserialize_string(m_vm, m_serialized, m_position));
-            u32 byte_length = m_serialized[m_position++];
-            u32 byte_offset = m_serialized[m_position++];
+            u32 byte_length = deserialize_primitive_type<u32>(m_serialized, m_position);
+            u32 byte_offset = deserialize_primitive_type<u32>(m_serialized, m_position);
 
             if (constructor_name == "DataView"sv) {
                 value = JS::DataView::create(*realm, &array_buffer, byte_length, byte_offset);
             } else {
-                u32 array_length = m_serialized[m_position++];
+                u32 array_length = deserialize_primitive_type<u32>(m_serialized, m_position);
                 JS::GCPtr<JS::TypedArrayBase> typed_array_ptr;
 #define CREATE_TYPED_ARRAY(ClassName)       \
     if (constructor_name == #ClassName##sv) \
@@ -760,7 +835,7 @@ public:
             auto& realm = *m_vm.current_realm();
             // 1. Let outputProto be targetRealm.[[Intrinsics]].[[%Array.prototype%]].
             // 2. Set value to ! ArrayCreate(serialized.[[Length]], outputProto).
-            auto length = read_u64();
+            auto length = deserialize_primitive_type<u64>(m_serialized, m_position);
             value = MUST(JS::Array::create(realm, length));
             // 3. Set deep to true.
             deep = true;
@@ -778,8 +853,8 @@ public:
         // 21. Otherwise, if serialized.[[Type]] is "Error", then:
         case ValueTag::ErrorObject: {
             auto& realm = *m_vm.current_realm();
-            auto type = static_cast<ErrorType>(m_serialized[m_position++]);
-            auto has_message = static_cast<bool>(m_serialized[m_position++]);
+            auto type = deserialize_primitive_type<ErrorType>(m_serialized, m_position);
+            auto has_message = deserialize_primitive_type<bool>(m_serialized, m_position);
             if (has_message) {
                 auto message = TRY(deserialize_string(m_vm, m_serialized, m_position));
                 switch (type) {
@@ -810,7 +885,20 @@ public:
         }
         // 22. Otherwise:
         default:
-            return WebIDL::DataCloneError::create(*m_vm.current_realm(), "Unsupported type"_fly_string);
+            VERIFY(tag == ValueTag::SerializableObject);
+
+            auto& realm = *m_vm.current_realm();
+            // 1. Let interfaceName be serialized.[[Type]].
+            auto interface_name = TRY(deserialize_string(m_vm, m_serialized, m_position));
+            // 2. If the interface identified by interfaceName is not exposed in targetRealm, then throw a "DataCloneError" DOMException.
+            if (!is_interface_exposed_on_target_realm(interface_name, realm))
+                return WebIDL::DataCloneError::create(realm, "Unsupported type"_string);
+
+            // 3. Set value to a new instance of the interface identified by interfaceName, created in targetRealm.
+            value = TRY(create_serialized_type(interface_name, realm));
+
+            // 4. Set deep to true.
+            deep = true;
         }
 
         // 23. Set memory[serialized] to value.
@@ -823,7 +911,7 @@ public:
             // 1. If serialized.[[Type]] is "Map", then:
             if (tag == ValueTag::MapObject) {
                 auto& map = static_cast<JS::Map&>(value.as_object());
-                auto length = read_u64();
+                auto length = deserialize_primitive_type<u64>(m_serialized, m_position);
                 // 1. For each Record { [[Key]], [[Value]] } entry of serialized.[[MapData]]:
                 for (u64 i = 0u; i < length; ++i) {
                     // 1. Let deserializedKey be ? StructuredDeserialize(entry.[[Key]], targetRealm, memory).
@@ -840,7 +928,7 @@ public:
             // 2. Otherwise, if serialized.[[Type]] is "Set", then:
             else if (tag == ValueTag::SetObject) {
                 auto& set = static_cast<JS::Set&>(value.as_object());
-                auto length = read_u64();
+                auto length = deserialize_primitive_type<u64>(m_serialized, m_position);
                 // 1. For each entry of serialized.[[SetData]]:
                 for (u64 i = 0u; i < length; ++i) {
                     // 1. Let deserializedEntry be ? StructuredDeserialize(entry, targetRealm, memory).
@@ -854,7 +942,7 @@ public:
             // 3. Otherwise, if serialized.[[Type]] is "Array" or "Object", then:
             else if (tag == ValueTag::ArrayObject || tag == ValueTag::Object) {
                 auto& object = value.as_object();
-                auto length = read_u64();
+                auto length = deserialize_primitive_type<u64>(m_serialized, m_position);
                 // 1. For each Record { [[Key]], [[Value]] } entry of serialized.[[Properties]]:
                 for (u64 i = 0u; i < length; ++i) {
                     auto key = TRY(deserialize_string(m_vm, m_serialized, m_position));
@@ -872,8 +960,9 @@ public:
 
             // 4. Otherwise:
             else {
-                // FIXME: 1. Perform the appropriate deserialization steps for the interface identified by serialized.[[Type]], given serialized, value, and targetRealm.
-                VERIFY_NOT_REACHED();
+                // 1. Perform the appropriate deserialization steps for the interface identified by serialized.[[Type]], given serialized, value, and targetRealm.
+                auto& serializable = dynamic_cast<Bindings::Serializable&>(value.as_object());
+                TRY(serializable.deserialization_steps(m_serialized, m_position, m_memory));
             }
         }
 
@@ -884,62 +973,134 @@ public:
 private:
     JS::VM& m_vm;
     ReadonlySpan<u32> m_serialized;
-    size_t m_position { 0 };
     JS::MarkedVector<JS::Value> m_memory; // Index -> JS value
+    size_t m_position { 0 };
 
-    u64 read_u64()
+    static WebIDL::ExceptionOr<JS::NonnullGCPtr<Bindings::PlatformObject>> create_serialized_type(StringView interface_name, JS::Realm& realm)
     {
-        u64 value;
-        memcpy(&value, m_serialized.offset_pointer(m_position), sizeof(value));
-        m_position += 2;
-        return value;
+        if (interface_name == "Blob"sv)
+            return FileAPI::Blob::create(realm);
+        if (interface_name == "File"sv)
+            return FileAPI::File::create(realm);
+        if (interface_name == "FileList"sv)
+            return FileAPI::FileList::create(realm);
+        if (interface_name == "DOMMatrixReadOnly"sv)
+            return Geometry::DOMMatrixReadOnly::create(realm);
+        if (interface_name == "DOMMatrix"sv)
+            return Geometry::DOMMatrix::create(realm);
+        if (interface_name == "DOMPointReadOnly"sv)
+            return Geometry::DOMPointReadOnly::create(realm);
+        if (interface_name == "DOMPoint"sv)
+            return Geometry::DOMPoint::create(realm);
+        if (interface_name == "DOMRectReadOnly"sv)
+            return Geometry::DOMRectReadOnly::create(realm);
+        if (interface_name == "DOMRect"sv)
+            return Geometry::DOMRect::create(realm);
+        if (interface_name == "CryptoKey"sv)
+            return Crypto::CryptoKey::create(realm);
+        if (interface_name == "DOMQuad"sv)
+            return Geometry::DOMQuad::create(realm);
+
+        VERIFY_NOT_REACHED();
     }
 
-    static WebIDL::ExceptionOr<ByteBuffer> deserialize_bytes(JS::VM& vm, ReadonlySpan<u32> vector, size_t& position)
+    // FIXME: Consolidate this function with the similar is_interface_exposed_on_target_realm() used when transferring objects.
+    //        Also, the name parameter would be better off being the interface name (as a string) so that we don't need a switch statement.
+    static bool is_interface_exposed_on_target_realm(StringView interface_name, JS::Realm& realm)
     {
-        u32 size_bits[2];
-        size_bits[0] = vector[position++];
-        size_bits[1] = vector[position++];
-        u64 const size = *bit_cast<u64*>(&size_bits);
-
-        auto bytes = TRY_OR_THROW_OOM(vm, ByteBuffer::create_uninitialized(size));
-        u64 byte_position = 0;
-        while (position < vector.size() && byte_position < size) {
-            for (u8 i = 0; i < 4; ++i) {
-                bytes[byte_position++] = (vector[position] >> (i * 8) & 0xFF);
-                if (byte_position == size)
-                    break;
-            }
-            position++;
-        }
-        return bytes;
-    }
-
-    static WebIDL::ExceptionOr<String> deserialize_string(JS::VM& vm, ReadonlySpan<u32> vector, size_t& position)
-    {
-        auto bytes = TRY(deserialize_bytes(vm, vector, position));
-        return TRY_OR_THROW_OOM(vm, String::from_utf8(StringView { bytes }));
-    }
-
-    static WebIDL::ExceptionOr<JS::NonnullGCPtr<JS::PrimitiveString>> deserialize_string_primitive(JS::VM& vm, ReadonlySpan<u32> vector, size_t& position)
-    {
-        auto bytes = TRY(deserialize_bytes(vm, vector, position));
-
-        return TRY(Bindings::throw_dom_exception_if_needed(vm, [&vm, &bytes]() {
-            return JS::PrimitiveString::create(vm, StringView { bytes });
-        }));
-    }
-
-    static WebIDL::ExceptionOr<JS::NonnullGCPtr<JS::BigInt>> deserialize_big_int_primitive(JS::VM& vm, ReadonlySpan<u32> vector, size_t& position)
-    {
-        auto string = TRY(deserialize_string_primitive(vm, vector, position));
-        auto string_view = TRY(Bindings::throw_dom_exception_if_needed(vm, [&string]() {
-            return string->utf8_string_view();
-        }));
-        auto bigint = MUST(::Crypto::SignedBigInteger::from_base(10, string_view.substring_view(0, string_view.length() - 1)));
-        return JS::BigInt::create(vm, bigint);
+        auto const& intrinsics = Bindings::host_defined_intrinsics(realm);
+        return intrinsics.is_exposed(interface_name);
     }
 };
+
+bool deserialize_boolean_primitive(ReadonlySpan<u32> const& serialized, size_t& position)
+{
+    return deserialize_primitive_type<bool>(serialized, position);
+}
+
+double deserialize_number_primitive(ReadonlySpan<u32> const& serialized, size_t& position)
+{
+    return deserialize_primitive_type<double>(serialized, position);
+}
+
+JS::NonnullGCPtr<JS::BooleanObject> deserialize_boolean_object(JS::Realm& realm, ReadonlySpan<u32> const& serialized, size_t& position)
+{
+    auto boolean_primitive = deserialize_boolean_primitive(serialized, position);
+    return JS::BooleanObject::create(realm, boolean_primitive);
+}
+
+JS::NonnullGCPtr<JS::NumberObject> deserialize_number_object(JS::Realm& realm, ReadonlySpan<u32> const& serialized, size_t& position)
+{
+    auto number_primitive = deserialize_number_primitive(serialized, position);
+    return JS::NumberObject::create(realm, number_primitive);
+}
+
+WebIDL::ExceptionOr<JS::NonnullGCPtr<JS::BigIntObject>> deserialize_big_int_object(JS::Realm& realm, ReadonlySpan<u32> const& serialized, size_t& position)
+{
+    auto big_int_primitive = TRY(deserialize_big_int_primitive(realm.vm(), serialized, position));
+    return JS::BigIntObject::create(realm, big_int_primitive);
+}
+
+WebIDL::ExceptionOr<JS::NonnullGCPtr<JS::StringObject>> deserialize_string_object(JS::Realm& realm, ReadonlySpan<u32> const& serialized, size_t& position)
+{
+    auto string_primitive = TRY(deserialize_string_primitive(realm.vm(), serialized, position));
+    return JS::StringObject::create(realm, string_primitive, realm.intrinsics().string_prototype());
+}
+
+JS::NonnullGCPtr<JS::Date> deserialize_date_object(JS::Realm& realm, ReadonlySpan<u32> const& serialized, size_t& position)
+{
+    auto double_value = deserialize_primitive_type<double>(serialized, position);
+    return JS::Date::create(realm, double_value);
+}
+
+WebIDL::ExceptionOr<JS::NonnullGCPtr<JS::RegExpObject>> deserialize_reg_exp_object(JS::Realm& realm, ReadonlySpan<u32> const& serialized, size_t& position)
+{
+    auto pattern = TRY(deserialize_string_primitive(realm.vm(), serialized, position));
+    auto flags = TRY(deserialize_string_primitive(realm.vm(), serialized, position));
+    return TRY(JS::regexp_create(realm.vm(), move(pattern), move(flags)));
+}
+
+WebIDL::ExceptionOr<ByteBuffer> deserialize_bytes(JS::VM& vm, ReadonlySpan<u32> vector, size_t& position)
+{
+    u64 const size = deserialize_primitive_type<u64>(vector, position);
+
+    auto bytes = TRY_OR_THROW_OOM(vm, ByteBuffer::create_uninitialized(size));
+    u64 byte_position = 0;
+    while (position < vector.size() && byte_position < size) {
+        for (u8 i = 0; i < 4; ++i) {
+            bytes[byte_position++] = (vector[position] >> (i * 8) & 0xFF);
+            if (byte_position == size)
+                break;
+        }
+        position++;
+    }
+    return bytes;
+}
+
+WebIDL::ExceptionOr<String> deserialize_string(JS::VM& vm, ReadonlySpan<u32> vector, size_t& position)
+{
+    auto bytes = TRY(deserialize_bytes(vm, vector, position));
+    return TRY_OR_THROW_OOM(vm, String::from_utf8(StringView { bytes }));
+}
+
+WebIDL::ExceptionOr<JS::NonnullGCPtr<JS::PrimitiveString>> deserialize_string_primitive(JS::VM& vm, ReadonlySpan<u32> vector, size_t& position)
+{
+    auto bytes = TRY(deserialize_bytes(vm, vector, position));
+
+    return TRY(Bindings::throw_dom_exception_if_needed(vm, [&vm, &bytes]() {
+        return JS::PrimitiveString::create(vm, StringView { bytes });
+    }));
+}
+
+WebIDL::ExceptionOr<JS::NonnullGCPtr<JS::BigInt>> deserialize_big_int_primitive(JS::VM& vm, ReadonlySpan<u32> vector, size_t& position)
+{
+    auto string = TRY(deserialize_string_primitive(vm, vector, position));
+    auto string_view = TRY(Bindings::throw_dom_exception_if_needed(vm, [&string]() {
+        return string->utf8_string_view();
+    }));
+    auto bigint = MUST(::Crypto::SignedBigInteger::from_base(10, string_view.substring_view(0, string_view.length() - 1)));
+    return JS::BigInt::create(vm, bigint);
+}
 
 // https://html.spec.whatwg.org/multipage/structured-data.html#structuredserializewithtransfer
 WebIDL::ExceptionOr<SerializedTransferRecord> structured_serialize_with_transfer(JS::VM& vm, JS::Value value, Vector<JS::Handle<JS::Object>> const& transfer_list)
@@ -953,7 +1114,7 @@ WebIDL::ExceptionOr<SerializedTransferRecord> structured_serialize_with_transfer
         // 1. If transferable has neither an [[ArrayBufferData]] internal slot nor a [[Detached]] internal slot, then throw a "DataCloneError" DOMException.
         // FIXME: Handle transferring ArrayBufferData objects
         if (!is<Bindings::Transferable>(*transferable)) {
-            return WebIDL::DataCloneError::create(*vm.current_realm(), "Cannot transfer type"_fly_string);
+            return WebIDL::DataCloneError::create(*vm.current_realm(), "Cannot transfer type"_string);
         }
 
         // FIXME: 2. If transferable has an [[ArrayBufferData]] internal slot and IsSharedArrayBuffer(transferable) is true, then throw a "DataCloneError" DOMException.
@@ -961,7 +1122,7 @@ WebIDL::ExceptionOr<SerializedTransferRecord> structured_serialize_with_transfer
         // 3. If memory[transferable] exists, then throw a "DataCloneError" DOMException.
         auto transferable_value = JS::Value(transferable);
         if (memory.contains(transferable_value)) {
-            return WebIDL::DataCloneError::create(*vm.current_realm(), "Cannot transfer value twice"_fly_string);
+            return WebIDL::DataCloneError::create(*vm.current_realm(), "Cannot transfer value twice"_string);
         }
 
         // 4. Set memory[transferable] to { [[Type]]: an uninitialized value }.
@@ -983,7 +1144,7 @@ WebIDL::ExceptionOr<SerializedTransferRecord> structured_serialize_with_transfer
         if (is<Bindings::Transferable>(*transferable)) {
             auto& transferable_object = dynamic_cast<Bindings::Transferable&>(*transferable);
             if (transferable_object.is_detached()) {
-                return WebIDL::DataCloneError::create(*vm.current_realm(), "Value already transferred"_fly_string);
+                return WebIDL::DataCloneError::create(*vm.current_realm(), "Value already transferred"_string);
             }
         }
 
@@ -1089,7 +1250,7 @@ WebIDL::ExceptionOr<DeserializedTransferRecord> structured_deserialize_with_tran
 
             // 2. If the interface identified by interfaceName is not exposed in targetRealm, then throw a "DataCloneError" DOMException.
             if (!is_interface_exposed_on_target_realm(interface_name, target_realm))
-                return WebIDL::DataCloneError::create(target_realm, "Unknown type transferred"_fly_string);
+                return WebIDL::DataCloneError::create(target_realm, "Unknown type transferred"_string);
 
             // 3. Set value to a new instance of the interface identified by interfaceName, created in targetRealm.
             // 4. Perform the appropriate transfer-receiving steps for the interface identified by interfaceName given transferDataHolder and value.
@@ -1146,12 +1307,22 @@ WebIDL::ExceptionOr<JS::Value> structured_deserialize(JS::VM& vm, SerializationR
     auto& target_settings = Bindings::host_defined_environment_settings_object(target_realm);
     target_settings.prepare_to_run_script();
 
-    Deserializer deserializer(vm, target_realm, serialized.span(), *memory);
-
-    auto result = deserializer.deserialize();
+    auto result = TRY(structured_deserialize_internal(vm, serialized.span(), target_realm, *memory));
 
     target_settings.clean_up_after_running_script();
-    return result;
+    VERIFY(result.value.has_value());
+    return *result.value;
+}
+
+WebIDL::ExceptionOr<DeserializedRecord> structured_deserialize_internal(JS::VM& vm, ReadonlySpan<u32> const& serialized, JS::Realm& target_realm, DeserializationMemory& memory, Optional<size_t> position)
+{
+    Deserializer deserializer(vm, target_realm, serialized, memory, move(position));
+    auto value = TRY(deserializer.deserialize());
+    auto deserialized_record = DeserializedRecord {
+        .value = value,
+        .position = deserializer.position(),
+    };
+    return deserialized_record;
 }
 
 }

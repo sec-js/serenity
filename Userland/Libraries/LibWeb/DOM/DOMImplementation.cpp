@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibURL/Origin.h>
+#include <LibWeb/Bindings/DOMImplementationPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/DOM/DOMImplementation.h>
@@ -12,7 +14,7 @@
 #include <LibWeb/DOM/ElementFactory.h>
 #include <LibWeb/DOM/Text.h>
 #include <LibWeb/DOM/XMLDocument.h>
-#include <LibWeb/HTML/Origin.h>
+#include <LibWeb/HTML/HTMLDocument.h>
 #include <LibWeb/Namespace.h>
 
 namespace Web::DOM {
@@ -36,7 +38,7 @@ DOMImplementation::~DOMImplementation() = default;
 void DOMImplementation::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::DOMImplementationPrototype>(realm, "DOMImplementation"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(DOMImplementation);
 }
 
 void DOMImplementation::visit_edges(Cell::Visitor& visitor)
@@ -46,7 +48,7 @@ void DOMImplementation::visit_edges(Cell::Visitor& visitor)
 }
 
 // https://dom.spec.whatwg.org/#dom-domimplementation-createdocument
-WebIDL::ExceptionOr<JS::NonnullGCPtr<Document>> DOMImplementation::create_document(Optional<FlyString> const& namespace_, String const& qualified_name, JS::GCPtr<DocumentType> doctype) const
+WebIDL::ExceptionOr<JS::NonnullGCPtr<XMLDocument>> DOMImplementation::create_document(Optional<FlyString> const& namespace_, String const& qualified_name, JS::GCPtr<DocumentType> doctype) const
 {
     // 1. Let document be a new XMLDocument
     auto xml_document = XMLDocument::create(realm());
@@ -91,10 +93,11 @@ WebIDL::ExceptionOr<JS::NonnullGCPtr<Document>> DOMImplementation::create_docume
 JS::NonnullGCPtr<Document> DOMImplementation::create_html_document(Optional<String> const& title) const
 {
     // 1. Let doc be a new document that is an HTML document.
-    auto html_document = Document::create(realm());
+    auto html_document = HTML::HTMLDocument::create(realm());
 
     // 2. Set doc’s content type to "text/html".
     html_document->set_content_type("text/html"_string);
+    html_document->set_document_type(DOM::Document::Type::HTML);
 
     html_document->set_ready_for_post_load_tasks(true);
 

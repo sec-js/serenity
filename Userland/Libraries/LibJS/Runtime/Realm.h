@@ -20,9 +20,7 @@
 namespace JS {
 
 // 9.3 Realms, https://tc39.es/ecma262/#realm-record
-class Realm final
-    : public Cell
-    , public Weakable<Realm> {
+class Realm final : public Cell {
     JS_CELL(Realm, Cell);
     JS_DECLARE_ALLOCATOR(Realm);
 
@@ -33,10 +31,7 @@ public:
         virtual void visit_edges(Cell::Visitor&) { }
     };
 
-    static ThrowCompletionOr<NonnullGCPtr<Realm>> create(VM&);
     static ThrowCompletionOr<NonnullOwnPtr<ExecutionContext>> initialize_host_defined_realm(VM&, Function<Object*(Realm&)> create_global_object, Function<Object*(Realm&)> create_global_this_value);
-
-    void set_global_object(Object* global_object, Object* this_value);
 
     [[nodiscard]] Object& global_object() const { return *m_global_object; }
     [[nodiscard]] GlobalEnvironment& global_environment() const { return *m_global_environment; }
@@ -52,18 +47,15 @@ public:
     HostDefined* host_defined() { return m_host_defined; }
     void set_host_defined(OwnPtr<HostDefined> host_defined) { m_host_defined = move(host_defined); }
 
-    void define_builtin(Bytecode::Builtin builtin, Value value)
+    void define_builtin(Bytecode::Builtin builtin, NonnullGCPtr<NativeFunction> value)
     {
         m_builtins[to_underlying(builtin)] = value;
     }
 
-    Value get_builtin_value(Bytecode::Builtin builtin)
+    NonnullGCPtr<NativeFunction> get_builtin_value(Bytecode::Builtin builtin)
     {
-        return m_builtins[to_underlying(builtin)];
+        return *m_builtins[to_underlying(builtin)];
     }
-
-    static FlatPtr global_environment_offset() { return OFFSET_OF(Realm, m_global_environment); }
-    static FlatPtr builtins_offset() { return OFFSET_OF(Realm, m_builtins); }
 
 private:
     Realm() = default;
@@ -74,7 +66,7 @@ private:
     GCPtr<Object> m_global_object;                 // [[GlobalObject]]
     GCPtr<GlobalEnvironment> m_global_environment; // [[GlobalEnv]]
     OwnPtr<HostDefined> m_host_defined;            // [[HostDefined]]
-    AK::Array<Value, to_underlying(Bytecode::Builtin::__Count)> m_builtins;
+    AK::Array<GCPtr<NativeFunction>, to_underlying(Bytecode::Builtin::__Count)> m_builtins;
 };
 
 }

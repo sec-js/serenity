@@ -54,8 +54,10 @@ UNMAP_AFTER_INIT ErrorOr<void> NVMeController::initialize(bool is_queue_polled)
     m_ready_timeout = Duration::from_milliseconds((CAP_TO(caps) + 1) * 500); // CAP.TO is in 500ms units
 
     calculate_doorbell_stride();
-    // IO queues + 1 admin queue
-    m_irq_type = TRY(reserve_irqs(nr_of_queues + 1, true));
+    if (queue_type == QueueType::IRQ) {
+        // IO queues + 1 admin queue
+        m_irq_type = TRY(reserve_irqs(nr_of_queues + 1, true));
+    }
 
     TRY(create_admin_queue(queue_type));
     VERIFY(m_admin_queue_ready == true);
@@ -143,25 +145,24 @@ ErrorOr<void> NVMeController::start_controller()
     return {};
 }
 
-UNMAP_AFTER_INIT u32 NVMeController::get_admin_q_dept()
+UNMAP_AFTER_INIT void NVMeController::set_admin_q_depth()
 {
-    u32 aqa = m_controller_regs->aqa;
     // Queue depth is 0 based
-    u32 q_depth = min(ACQ_SIZE(aqa), ASQ_SIZE(aqa)) + 1;
-    dbgln_if(NVME_DEBUG, "NVMe: Admin queue depth is {}", q_depth);
-    return q_depth;
+    u16 queue_depth = ADMIN_QUEUE_SIZE - 1;
+    m_controller_regs->aqa = queue_depth | (queue_depth << AQA_ACQ_SHIFT);
 }
 
 UNMAP_AFTER_INIT ErrorOr<void> NVMeController::identify_and_init_namespaces()
 {
 
-    RefPtr<Memory::PhysicalPage> prp_dma_buffer;
+    RefPtr<Memory::PhysicalRAMPage> prp_dma_buffer;
     OwnPtr<Memory::Region> prp_dma_region;
     auto namespace_data_struct = TRY(ByteBuffer::create_zeroed(NVMe_IDENTIFY_SIZE));
     u32 active_namespace_list[NVMe_IDENTIFY_SIZE / sizeof(u32)];
 
     {
-        auto buffer = TRY(MM.allocate_dma_buffer_page("Identify PRP"sv, Memory::Region::Access::ReadWrite, prp_dma_buffer));
+        // FIXME: Synchronize DMA buffer accesses correctly and set the MemoryType to NonCacheable.
+        auto buffer = TRY(MM.allocate_dma_buffer_page("Identify PRP"sv, Memory::Region::Access::ReadWrite, prp_dma_buffer, Memory::MemoryType::IO));
         prp_dma_region = move(buffer);
     }
 
@@ -204,13 +205,12 @@ UNMAP_AFTER_INIT ErrorOr<void> NVMeController::identify_and_init_namespaces()
             if (void* fault_at; !safe_memcpy(&id_ns, prp_dma_region->vaddr().as_ptr(), NVMe_IDENTIFY_SIZE, fault_at)) {
                 return EFAULT;
             }
-            auto val = get_ns_features(id_ns);
-            auto block_counts = val.get<0>();
-            auto block_size = 1 << val.get<1>();
+            auto [block_counts, lba_size] = get_ns_features(id_ns);
+            auto block_size = 1 << lba_size;
 
             dbgln_if(NVME_DEBUG, "NVMe: Block count is {} and Block size is {}", block_counts, block_size);
 
-            m_namespaces.append(TRY(NVMeNameSpace::try_create(*this, m_queues, nsid, block_counts, block_size)));
+            m_namespaces.append(TRY(NVMeNameSpace::create(*this, m_queues, nsid, block_counts, block_size)));
             m_device_count++;
             dbgln_if(NVME_DEBUG, "NVMe: Initialized namespace with NSID: {}", nsid);
         }
@@ -220,12 +220,13 @@ UNMAP_AFTER_INIT ErrorOr<void> NVMeController::identify_and_init_namespaces()
 
 ErrorOr<void> NVMeController::identify_and_init_controller()
 {
-    RefPtr<Memory::PhysicalPage> prp_dma_buffer;
+    RefPtr<Memory::PhysicalRAMPage> prp_dma_buffer;
     OwnPtr<Memory::Region> prp_dma_region;
     IdentifyController ctrl {};
 
     {
-        auto buffer = TRY(MM.allocate_dma_buffer_page("Identify PRP"sv, Memory::Region::Access::ReadWrite, prp_dma_buffer));
+        // FIXME: Synchronize DMA buffer accesses correctly and set the MemoryType to NonCacheable.
+        auto buffer = TRY(MM.allocate_dma_buffer_page("Identify PRP"sv, Memory::Region::Access::ReadWrite, prp_dma_buffer, Memory::MemoryType::IO));
         prp_dma_region = move(buffer);
     }
 
@@ -251,13 +252,15 @@ ErrorOr<void> NVMeController::identify_and_init_controller()
         OwnPtr<Memory::Region> eventidx_dma_region;
 
         {
-            auto buffer = TRY(MM.allocate_dma_buffer_page("shadow dbbuf"sv, Memory::Region::Access::ReadWrite, m_dbbuf_shadow_page));
+            // FIXME: Synchronize DMA buffer accesses correctly and set the MemoryType to NonCacheable.
+            auto buffer = TRY(MM.allocate_dma_buffer_page("shadow dbbuf"sv, Memory::Region::Access::ReadWrite, m_dbbuf_shadow_page, Memory::MemoryType::IO));
             dbbuf_dma_region = move(buffer);
             memset(dbbuf_dma_region->vaddr().as_ptr(), 0, PAGE_SIZE);
         }
 
         {
-            auto buffer = TRY(MM.allocate_dma_buffer_page("eventidx"sv, Memory::Region::Access::ReadWrite, m_dbbuf_eventidx_page));
+            // FIXME: Synchronize DMA buffer accesses correctly and set the MemoryType to NonCacheable.
+            auto buffer = TRY(MM.allocate_dma_buffer_page("eventidx"sv, Memory::Region::Access::ReadWrite, m_dbbuf_eventidx_page, Memory::MemoryType::IO));
             eventidx_dma_region = move(buffer);
             memset(eventidx_dma_region->vaddr().as_ptr(), 0, PAGE_SIZE);
         }
@@ -277,19 +280,21 @@ ErrorOr<void> NVMeController::identify_and_init_controller()
     return {};
 }
 
-UNMAP_AFTER_INIT Tuple<u64, u8> NVMeController::get_ns_features(IdentifyNamespace& identify_data_struct)
+UNMAP_AFTER_INIT NVMeController::NSFeatures NVMeController::get_ns_features(IdentifyNamespace& identify_data_struct)
 {
     auto flbas = identify_data_struct.flbas & FLBA_SIZE_MASK;
     auto namespace_size = identify_data_struct.nsze;
     auto lba_format = identify_data_struct.lbaf[flbas];
 
     auto lba_size = (lba_format & LBA_SIZE_MASK) >> 16;
-    return Tuple<u64, u8>(namespace_size, lba_size);
+    return { namespace_size, static_cast<u8>(lba_size) };
 }
 
 LockRefPtr<StorageDevice> NVMeController::device(u32 index) const
 {
-    return m_namespaces.at(index);
+    // FIXME: Remove this once we get rid of this hacky method in the future.
+    auto device = m_namespaces.at(index);
+    return *device;
 }
 
 size_t NVMeController::devices_count() const
@@ -304,11 +309,6 @@ ErrorOr<void> NVMeController::reset()
     return {};
 }
 
-ErrorOr<void> NVMeController::shutdown()
-{
-    return Error::from_errno(ENOTIMPL);
-}
-
 void NVMeController::complete_current_request([[maybe_unused]] AsyncDeviceRequest::RequestResult result)
 {
     VERIFY_NOT_REACHED();
@@ -316,20 +316,21 @@ void NVMeController::complete_current_request([[maybe_unused]] AsyncDeviceReques
 
 UNMAP_AFTER_INIT ErrorOr<void> NVMeController::create_admin_queue(QueueType queue_type)
 {
-    auto qdepth = get_admin_q_dept();
     OwnPtr<Memory::Region> cq_dma_region;
-    Vector<NonnullRefPtr<Memory::PhysicalPage>> cq_dma_pages;
+    Vector<NonnullRefPtr<Memory::PhysicalRAMPage>> cq_dma_pages;
     OwnPtr<Memory::Region> sq_dma_region;
-    Vector<NonnullRefPtr<Memory::PhysicalPage>> sq_dma_pages;
-    auto cq_size = round_up_to_power_of_two(CQ_SIZE(qdepth), 4096);
-    auto sq_size = round_up_to_power_of_two(SQ_SIZE(qdepth), 4096);
+    Vector<NonnullRefPtr<Memory::PhysicalRAMPage>> sq_dma_pages;
+    set_admin_q_depth();
+    auto cq_size = round_up_to_power_of_two(CQ_SIZE(ADMIN_QUEUE_SIZE), 4096);
+    auto sq_size = round_up_to_power_of_two(SQ_SIZE(ADMIN_QUEUE_SIZE), 4096);
     auto maybe_error = reset_controller();
     if (maybe_error.is_error()) {
         dmesgln_pci(*this, "Failed to reset the NVMe controller");
         return maybe_error;
     }
     {
-        auto buffer = TRY(MM.allocate_dma_buffer_pages(cq_size, "Admin CQ queue"sv, Memory::Region::Access::ReadWrite, cq_dma_pages));
+        // FIXME: Synchronize DMA buffer accesses correctly and set the MemoryType to NonCacheable.
+        auto buffer = TRY(MM.allocate_dma_buffer_pages(cq_size, "Admin CQ queue"sv, Memory::Region::Access::ReadWrite, cq_dma_pages, Memory::MemoryType::IO));
         cq_dma_region = move(buffer);
     }
 
@@ -338,7 +339,8 @@ UNMAP_AFTER_INIT ErrorOr<void> NVMeController::create_admin_queue(QueueType queu
     memset(cq_dma_region->vaddr().as_ptr(), 0, cq_size);
 
     {
-        auto buffer = TRY(MM.allocate_dma_buffer_pages(sq_size, "Admin SQ queue"sv, Memory::Region::Access::ReadWrite, sq_dma_pages));
+        // FIXME: Synchronize DMA buffer accesses correctly and set the MemoryType to NonCacheable.
+        auto buffer = TRY(MM.allocate_dma_buffer_pages(sq_size, "Admin SQ queue"sv, Memory::Region::Access::ReadWrite, sq_dma_pages, Memory::MemoryType::IO));
         sq_dma_region = move(buffer);
     }
     auto doorbell_regs = TRY(Memory::map_typed_writable<DoorbellRegister volatile>(m_bar.offset(REG_SQ0TDBL_START)));
@@ -351,7 +353,9 @@ UNMAP_AFTER_INIT ErrorOr<void> NVMeController::create_admin_queue(QueueType queu
     m_controller_regs->acq = reinterpret_cast<u64>(AK::convert_between_host_and_little_endian(cq_dma_pages.first()->paddr().as_ptr()));
     m_controller_regs->asq = reinterpret_cast<u64>(AK::convert_between_host_and_little_endian(sq_dma_pages.first()->paddr().as_ptr()));
 
-    auto irq = TRY(allocate_irq(0)); // Admin queue always uses the 0th index when using MSIx
+    Optional<u8> irq;
+    if (queue_type == QueueType::IRQ)
+        irq = TRY(allocate_irq(0)); // Admin queue always uses the 0th index when using MSIx
 
     maybe_error = start_controller();
     if (maybe_error.is_error()) {
@@ -359,7 +363,7 @@ UNMAP_AFTER_INIT ErrorOr<void> NVMeController::create_admin_queue(QueueType queu
         return maybe_error;
     }
     set_admin_queue_ready_flag();
-    m_admin_queue = TRY(NVMeQueue::try_create(*this, 0, irq, qdepth, move(cq_dma_region), move(sq_dma_region), move(doorbell), queue_type));
+    m_admin_queue = TRY(NVMeQueue::try_create(*this, 0, irq, ADMIN_QUEUE_SIZE, move(cq_dma_region), move(sq_dma_region), move(doorbell), queue_type));
 
     dbgln_if(NVME_DEBUG, "NVMe: Admin queue created");
     return {};
@@ -368,14 +372,15 @@ UNMAP_AFTER_INIT ErrorOr<void> NVMeController::create_admin_queue(QueueType queu
 UNMAP_AFTER_INIT ErrorOr<void> NVMeController::create_io_queue(u8 qid, QueueType queue_type)
 {
     OwnPtr<Memory::Region> cq_dma_region;
-    Vector<NonnullRefPtr<Memory::PhysicalPage>> cq_dma_pages;
+    Vector<NonnullRefPtr<Memory::PhysicalRAMPage>> cq_dma_pages;
     OwnPtr<Memory::Region> sq_dma_region;
-    Vector<NonnullRefPtr<Memory::PhysicalPage>> sq_dma_pages;
+    Vector<NonnullRefPtr<Memory::PhysicalRAMPage>> sq_dma_pages;
     auto cq_size = round_up_to_power_of_two(CQ_SIZE(IO_QUEUE_SIZE), 4096);
     auto sq_size = round_up_to_power_of_two(SQ_SIZE(IO_QUEUE_SIZE), 4096);
 
     {
-        auto buffer = TRY(MM.allocate_dma_buffer_pages(cq_size, "IO CQ queue"sv, Memory::Region::Access::ReadWrite, cq_dma_pages));
+        // FIXME: Synchronize DMA buffer accesses correctly and set the MemoryType to NonCacheable.
+        auto buffer = TRY(MM.allocate_dma_buffer_pages(cq_size, "IO CQ queue"sv, Memory::Region::Access::ReadWrite, cq_dma_pages, Memory::MemoryType::IO));
         cq_dma_region = move(buffer);
     }
 
@@ -384,7 +389,8 @@ UNMAP_AFTER_INIT ErrorOr<void> NVMeController::create_io_queue(u8 qid, QueueType
     memset(cq_dma_region->vaddr().as_ptr(), 0, cq_size);
 
     {
-        auto buffer = TRY(MM.allocate_dma_buffer_pages(sq_size, "IO SQ queue"sv, Memory::Region::Access::ReadWrite, sq_dma_pages));
+        // FIXME: Synchronize DMA buffer accesses correctly and set the MemoryType to NonCacheable.
+        auto buffer = TRY(MM.allocate_dma_buffer_pages(sq_size, "IO SQ queue"sv, Memory::Region::Access::ReadWrite, sq_dma_pages, Memory::MemoryType::IO));
         sq_dma_region = move(buffer);
     }
 
@@ -398,7 +404,10 @@ UNMAP_AFTER_INIT ErrorOr<void> NVMeController::create_io_queue(u8 qid, QueueType
         auto flags = (queue_type == QueueType::IRQ) ? QUEUE_IRQ_ENABLED : QUEUE_IRQ_DISABLED;
         flags |= QUEUE_PHY_CONTIGUOUS;
         // When using MSIx interrupts, qid is used as an index into the interrupt table
-        sub.create_cq.irq_vector = (m_irq_type == PCI::InterruptType::PIN) ? 0 : qid;
+        if (m_irq_type.has_value() && m_irq_type.value() != PCI::InterruptType::PIN)
+            sub.create_cq.irq_vector = qid;
+        else
+            sub.create_cq.irq_vector = 0;
         sub.create_cq.cq_flags = AK::convert_between_host_and_little_endian(flags & 0xFFFF);
         submit_admin_command(sub, true);
     }

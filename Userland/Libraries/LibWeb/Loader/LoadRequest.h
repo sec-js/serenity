@@ -9,8 +9,8 @@
 #include <AK/ByteBuffer.h>
 #include <AK/HashMap.h>
 #include <AK/Time.h>
-#include <AK/URL.h>
 #include <LibCore/ElapsedTimer.h>
+#include <LibURL/URL.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/Page/Page.h>
 
@@ -18,11 +18,9 @@ namespace Web {
 
 class LoadRequest {
 public:
-    LoadRequest()
-    {
-    }
+    LoadRequest();
 
-    static LoadRequest create_for_url_on_page(const AK::URL& url, Page* page);
+    static LoadRequest create_for_url_on_page(const URL::URL& url, Page* page);
 
     // The main resource is the file being displayed in a frame (unlike subresources like images, scripts, etc.)
     // If a main resource fails with an HTTP error, we may still display its content if non-empty, e.g a custom 404 page.
@@ -31,8 +29,10 @@ public:
 
     bool is_valid() const { return m_url.is_valid(); }
 
-    const AK::URL& url() const { return m_url; }
-    void set_url(const AK::URL& url) { m_url = url; }
+    int id() const { return m_id; }
+
+    const URL::URL& url() const { return m_url; }
+    void set_url(const URL::URL& url) { m_url = url; }
 
     ByteString const& method() const { return m_method; }
     void set_method(ByteString const& method) { m_method = method; }
@@ -41,9 +41,9 @@ public:
     void set_body(ByteBuffer body) { m_body = move(body); }
 
     void start_timer() { m_load_timer.start(); }
-    Duration load_time() const { return m_load_timer.elapsed_time(); }
+    AK::Duration load_time() const { return m_load_timer.elapsed_time(); }
 
-    JS::GCPtr<Page> page() { return m_page.ptr(); }
+    JS::GCPtr<Page> page() const { return m_page.ptr(); }
     void set_page(Page& page) { m_page = page; }
 
     unsigned hash() const
@@ -74,7 +74,8 @@ public:
     HashMap<ByteString, ByteString, CaseInsensitiveStringTraits> const& headers() const { return m_headers; }
 
 private:
-    AK::URL m_url;
+    int m_id { 0 };
+    URL::URL m_url;
     ByteString m_method { "GET" };
     HashMap<ByteString, ByteString, CaseInsensitiveStringTraits> m_headers;
     ByteBuffer m_body;

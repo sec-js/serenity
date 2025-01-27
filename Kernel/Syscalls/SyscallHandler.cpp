@@ -31,7 +31,7 @@ struct HandlerMetadata {
 };
 
 #define __ENUMERATE_SYSCALL(sys_call, needs_lock) { bit_cast<Handler>(&Process::sys$##sys_call), needs_lock },
-static const HandlerMetadata s_syscall_table[] = {
+static HandlerMetadata const s_syscall_table[] = {
     ENUMERATE_SYSCALLS(__ENUMERATE_SYSCALL)
 };
 #undef __ENUMERATE_SYSCALL
@@ -129,7 +129,7 @@ NEVER_INLINE void syscall_handler(TrapFrame* trap)
         process.tracer_trap(*current_thread, regs); // this triggers SIGTRAP and stops the thread!
     }
 
-    current_thread->yield_if_stopped();
+    current_thread->yield_if_should_be_stopped();
 
 #if ARCH(X86_64)
     // Apply a random offset in the range 0-255 to the stack pointer,
@@ -178,7 +178,7 @@ NEVER_INLINE void syscall_handler(TrapFrame* trap)
         process.tracer_trap(*current_thread, regs); // this triggers SIGTRAP and stops the thread!
     }
 
-    current_thread->yield_if_stopped();
+    current_thread->yield_if_should_be_stopped();
 
     current_thread->check_dispatch_pending_signal();
 

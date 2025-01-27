@@ -5,6 +5,7 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/SVGAnimatedNumberPrototype.h>
 #include <LibWeb/SVG/SVGAnimatedNumber.h>
 
 namespace Web::SVG {
@@ -28,7 +29,7 @@ SVGAnimatedNumber::~SVGAnimatedNumber() = default;
 void SVGAnimatedNumber::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::SVGAnimatedNumberPrototype>(realm, "SVGAnimatedNumber"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(SVGAnimatedNumber);
 }
 
 }

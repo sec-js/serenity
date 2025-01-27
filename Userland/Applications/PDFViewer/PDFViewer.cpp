@@ -48,6 +48,8 @@ PDFViewer::PDFViewer()
     m_page_view_mode = static_cast<PageViewMode>(Config::read_i32("PDFViewer"sv, "Display"sv, "PageMode"sv, 0));
     m_rendering_preferences.show_clipping_paths = Config::read_bool("PDFViewer"sv, "Rendering"sv, "ShowClippingPaths"sv, false);
     m_rendering_preferences.show_images = Config::read_bool("PDFViewer"sv, "Rendering"sv, "ShowImages"sv, true);
+    m_rendering_preferences.show_hidden_text = Config::read_bool("PDFViewer"sv, "Rendering"sv, "ShowHiddenText"sv, false);
+    m_rendering_preferences.show_diagnostics = Config::read_bool("PDFViewer"sv, "Rendering"sv, "ShowDiagnostics"sv, false);
     m_rendering_preferences.clip_images = Config::read_bool("PDFViewer"sv, "Rendering"sv, "ClipImages"sv, true);
     m_rendering_preferences.clip_paths = Config::read_bool("PDFViewer"sv, "Rendering"sv, "ClipPaths"sv, true);
     m_rendering_preferences.clip_text = Config::read_bool("PDFViewer"sv, "Rendering"sv, "ClipText"sv, true);
@@ -170,6 +172,13 @@ void PDFViewer::set_current_page(u32 current_page)
     update();
 }
 
+void PDFViewer::set_show_rendering_diagnostics(bool show_diagnostics)
+{
+    m_rendering_preferences.show_diagnostics = show_diagnostics;
+    Config::write_bool("PDFViewer"sv, "Rendering"sv, "ShowDiagnostics"sv, show_diagnostics);
+    update();
+}
+
 void PDFViewer::set_show_clipping_paths(bool show_clipping_paths)
 {
     m_rendering_preferences.show_clipping_paths = show_clipping_paths;
@@ -181,6 +190,13 @@ void PDFViewer::set_show_images(bool show_images)
 {
     m_rendering_preferences.show_images = show_images;
     Config::write_bool("PDFViewer"sv, "Rendering"sv, "ShowImages"sv, show_images);
+    update();
+}
+
+void PDFViewer::set_show_hidden_text(bool show_hidden_text)
+{
+    m_rendering_preferences.show_hidden_text = show_hidden_text;
+    Config::write_bool("PDFViewer"sv, "Rendering"sv, "ShowHiddenText"sv, show_hidden_text);
     update();
 }
 
@@ -350,17 +366,7 @@ PDF::PDFErrorOr<NonnullRefPtr<Gfx::Bitmap>> PDFViewer::render_page(u32 page_inde
         return bitmap;
     }
 
-    if (page.rotate + m_rotations != 0) {
-        int rotation_count = ((page.rotate + m_rotations) / 90) % 4;
-        if (rotation_count == 3) {
-            bitmap = TRY(bitmap->rotated(Gfx::RotationDirection::CounterClockwise));
-        } else {
-            for (int i = 0; i < rotation_count; i++)
-                bitmap = TRY(bitmap->rotated(Gfx::RotationDirection::Clockwise));
-        }
-    }
-
-    return bitmap;
+    return TRY(PDF::Renderer::apply_page_rotation(bitmap, page, m_rotations));
 }
 
 PDF::PDFErrorOr<void> PDFViewer::cache_page_dimensions(bool recalculate_fixed_info)

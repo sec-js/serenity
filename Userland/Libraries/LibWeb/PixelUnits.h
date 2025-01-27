@@ -98,6 +98,15 @@ public:
         return from_raw(raw_value);
     }
 
+    template<FloatingPoint F>
+    static CSSPixels floored_value_for(F value)
+    {
+        i32 raw_value = 0;
+        if (!isnan(value))
+            raw_value = AK::clamp_to<int>(floor(value * fixed_point_denominator));
+        return from_raw(raw_value);
+    }
+
     template<Unsigned U>
     constexpr CSSPixels(U value)
     {
@@ -308,6 +317,20 @@ public:
         : m_numerator(numerator)
         , m_denominator(denominator)
     {
+        VERIFY(denominator != 0);
+    }
+
+    template<FloatingPoint F>
+    constexpr CSSPixelFraction(F numerator, F denominator = 1)
+    {
+        if (CSSPixels::nearest_value_for(denominator) == 0) {
+            numerator = numerator / denominator;
+            denominator = 1;
+        }
+
+        m_numerator = CSSPixels(numerator);
+        m_denominator = CSSPixels(denominator);
+
         VERIFY(denominator != 0);
     }
 

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibLocale/Segmenter.h>
 #include <LibWeb/Bindings/CharacterDataPrototype.h>
 #include <LibWeb/DOM/CharacterData.h>
 #include <LibWeb/DOM/Document.h>
@@ -22,10 +23,12 @@ CharacterData::CharacterData(Document& document, NodeType type, String const& da
 {
 }
 
+CharacterData::~CharacterData() = default;
+
 void CharacterData::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::CharacterDataPrototype>(realm, "CharacterData"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(CharacterData);
 }
 
 // https://dom.spec.whatwg.org/#dom-characterdata-data
@@ -49,15 +52,15 @@ WebIDL::ExceptionOr<String> CharacterData::substring_data(size_t offset, size_t 
 
     // 2. If offset is greater than length, then throw an "IndexSizeError" DOMException.
     if (offset > length)
-        return WebIDL::IndexSizeError::create(realm(), "Substring offset out of range."_fly_string);
+        return WebIDL::IndexSizeError::create(realm(), "Substring offset out of range."_string);
 
     // 3. If offset plus count is greater than length, return a string whose value is the code units from the offsetth code unit
     //    to the end of node’s data, and then return.
     if (offset + count > length)
-        return MUST(utf16_view.substring_view(offset).to_utf8());
+        return MUST(utf16_view.substring_view(offset).to_utf8(Utf16View::AllowInvalidCodeUnits::Yes));
 
     // 4. Return a string whose value is the code units from the offsetth code unit to the offset+countth code unit in node’s data.
-    return MUST(utf16_view.substring_view(offset, count).to_utf8());
+    return MUST(utf16_view.substring_view(offset, count).to_utf8(Utf16View::AllowInvalidCodeUnits::Yes));
 }
 
 // https://dom.spec.whatwg.org/#concept-cd-replace
@@ -71,7 +74,7 @@ WebIDL::ExceptionOr<void> CharacterData::replace_data(size_t offset, size_t coun
 
     // 2. If offset is greater than length, then throw an "IndexSizeError" DOMException.
     if (offset > length)
-        return WebIDL::IndexSizeError::create(realm(), "Replacement offset out of range."_fly_string);
+        return WebIDL::IndexSizeError::create(realm(), "Replacement offset out of range."_string);
 
     // 3. If offset plus count is greater than length, then set count to length minus offset.
     if (offset + count > length)
@@ -84,9 +87,9 @@ WebIDL::ExceptionOr<void> CharacterData::replace_data(size_t offset, size_t coun
     // 6. Let delete offset be offset + data’s length.
     // 7. Starting from delete offset code units, remove count code units from node’s data.
     StringBuilder builder;
-    builder.append(MUST(utf16_view.substring_view(0, offset).to_utf8()));
+    builder.append(MUST(utf16_view.substring_view(0, offset).to_utf8(Utf16View::AllowInvalidCodeUnits::Yes)));
     builder.append(data);
-    builder.append(MUST(utf16_view.substring_view(offset + count).to_utf8()));
+    builder.append(MUST(utf16_view.substring_view(offset + count).to_utf8(Utf16View::AllowInvalidCodeUnits::Yes)));
     m_data = MUST(builder.to_string());
 
     // 8. For each live range whose start node is node and start offset is greater than offset but less than or equal to offset plus count, set its start offset to offset.
@@ -98,7 +101,7 @@ WebIDL::ExceptionOr<void> CharacterData::replace_data(size_t offset, size_t coun
     // 9. For each live range whose end node is node and end offset is greater than offset but less than or equal to offset plus count, set its end offset to offset.
     for (auto& range : Range::live_ranges()) {
         if (range->end_container() == this && range->end_offset() > offset && range->end_offset() <= (offset + count))
-            TRY(range->set_end(*range->end_container(), range->end_offset()));
+            TRY(range->set_end(*range->end_container(), offset));
     }
 
     // 10. For each live range whose start node is node and start offset is greater than offset plus count, increase its start offset by data’s length and decrease it by count.
@@ -123,8 +126,13 @@ WebIDL::ExceptionOr<void> CharacterData::replace_data(size_t offset, size_t coun
     if (auto* layout_node = this->layout_node(); layout_node && layout_node->is_text_node())
         static_cast<Layout::TextNode&>(*layout_node).invalidate_text_for_rendering();
 
-    set_needs_style_update(true);
     document().set_needs_layout();
+
+    if (m_grapheme_segmenter)
+        m_grapheme_segmenter->set_segmented_text(m_data);
+    if (m_word_segmenter)
+        m_word_segmenter->set_segmented_text(m_data);
+
     return {};
 }
 
@@ -147,6 +155,26 @@ WebIDL::ExceptionOr<void> CharacterData::delete_data(size_t offset, size_t count
 {
     // The deleteData(offset, count) method steps are to replace data with node this, offset offset, count count, and data the empty string.
     return replace_data(offset, count, String {});
+}
+
+Locale::Segmenter& CharacterData::grapheme_segmenter() const
+{
+    if (!m_grapheme_segmenter) {
+        m_grapheme_segmenter = document().grapheme_segmenter().clone();
+        m_grapheme_segmenter->set_segmented_text(m_data);
+    }
+
+    return *m_grapheme_segmenter;
+}
+
+Locale::Segmenter& CharacterData::word_segmenter() const
+{
+    if (!m_word_segmenter) {
+        m_word_segmenter = document().word_segmenter().clone();
+        m_word_segmenter->set_segmented_text(m_data);
+    }
+
+    return *m_word_segmenter;
 }
 
 }

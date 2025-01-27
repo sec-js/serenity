@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Shannon Booth <shannon@serenityos.org>
+ * Copyright (c) 2023-2024, Shannon Booth <shannon@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -35,9 +35,20 @@ static Optional<Location> locate_hunk(Vector<StringView> const& content, Hunk co
     // Make a first best guess at where the from-file range is telling us where the hunk should be.
     size_t offset_guess = expected_line_number(hunk.location) - 1 + offset;
 
-    // If there's no lines surrounding this hunk - it will always succeed, so there is no point in checking any further.
-    if (hunk.location.old_range.number_of_lines == 0)
+    // If there's no lines surrounding this hunk - it will always succeed,
+    // so there is no point in checking any further. Note that this check is
+    // also what makes matching against an empty 'from file' work (with no lines),
+    // as in that case there is no content for us to even match against in the
+    // first place!
+    //
+    // However, we also should reject patches being added when the hunk is
+    // claiming the file is completely empty - but there are actually lines in
+    // that file.
+    if (hunk.location.old_range.number_of_lines == 0) {
+        if (hunk.location.old_range.start_line == 0 && !content.is_empty())
+            return {};
         return Location { offset_guess, 0, 0 };
+    }
 
     size_t patch_prefix_context = 0;
     for (auto const& line : hunk.lines) {
@@ -59,9 +70,8 @@ static Optional<Location> locate_hunk(Vector<StringView> const& content, Hunk co
     // match the hunk by ignoring an increasing amount of context lines. The number of context lines that are ignored is
     // called the 'fuzz'.
     for (size_t fuzz = 0; fuzz <= max_fuzz; ++fuzz) {
-
-        auto suffix_fuzz = max(fuzz + patch_suffix_context - context, 0);
-        auto prefix_fuzz = max(fuzz + patch_prefix_context - context, 0);
+        auto suffix_fuzz = (patch_suffix_context >= context) ? (fuzz + patch_suffix_context - context) : 0;
+        auto prefix_fuzz = (patch_prefix_context >= context) ? (fuzz + patch_prefix_context - context) : 0;
 
         // If the fuzz is greater than the total number of lines for a hunk, then it may be possible for the hunk to match anything.
         if (suffix_fuzz + prefix_fuzz >= hunk.lines.size())
@@ -71,7 +81,7 @@ static Optional<Location> locate_hunk(Vector<StringView> const& content, Hunk co
             line += prefix_fuzz;
 
             // Ensure that all of the lines in the hunk match starting from 'line', ignoring the specified number of context lines.
-            return all_of(hunk.lines.begin() + prefix_fuzz, hunk.lines.end() - suffix_fuzz, [&](const Line& hunk_line) {
+            return all_of(hunk.lines.begin() + prefix_fuzz, hunk.lines.end() - suffix_fuzz, [&](Line const& hunk_line) {
                 // Ignore additions in our increment of line and comparison as they are not part of the 'original file'
                 if (hunk_line.operation == Line::Operation::Addition)
                     return true;
@@ -120,7 +130,59 @@ static ErrorOr<size_t> write_hunk(Stream& out, Hunk const& hunk, Location const&
     return line_number;
 }
 
-ErrorOr<void> apply_patch(Stream& out, Vector<StringView> const& lines, Patch const& patch)
+static ErrorOr<size_t> write_define_hunk(Stream& out, Hunk const& hunk, Location const& location, Vector<StringView> const& lines, StringView define)
+{
+    enum class State {
+        Outside,
+        InsideIFNDEF,
+        InsideIFDEF,
+        InsideELSE,
+    };
+
+    auto state = State::Outside;
+
+    auto line_number = location.line_number;
+
+    for (auto const& patch_line : hunk.lines) {
+        if (patch_line.operation == Diff::Line::Operation::Context) {
+            auto const& line = lines.at(line_number);
+            ++line_number;
+            if (state != State::Outside) {
+                TRY(out.write_formatted("#endif\n"));
+                state = State::Outside;
+            }
+            TRY(out.write_formatted("{}\n", line));
+        } else if (patch_line.operation == Diff::Line::Operation::Addition) {
+            if (state == State::Outside) {
+                state = State::InsideIFDEF;
+                TRY(out.write_formatted("#ifdef {}\n", define));
+            } else if (state == State::InsideIFNDEF) {
+                state = State::InsideELSE;
+                TRY(out.write_formatted("#else\n"));
+            }
+            TRY(out.write_formatted("{}\n", patch_line.content));
+        } else if (patch_line.operation == Diff::Line::Operation::Removal) {
+            auto const& line = lines.at(line_number);
+            ++line_number;
+
+            if (state == State::Outside) {
+                state = State::InsideIFNDEF;
+                TRY(out.write_formatted("#ifndef {}\n", define));
+            } else if (state == State::InsideIFDEF) {
+                state = State::InsideELSE;
+                TRY(out.write_formatted("#else\n"));
+            }
+            TRY(out.write_formatted("{}\n", line));
+        }
+    }
+
+    if (state != State::Outside)
+        TRY(out.write_formatted("#endif\n"));
+
+    return line_number;
+}
+
+ErrorOr<void> apply_patch(Stream& out, Vector<StringView> const& lines, Patch const& patch, Optional<StringView> const& define)
 {
     size_t line_number = 0; // NOTE: relative to 'old' file.
     ssize_t offset_error = 0;
@@ -140,7 +202,10 @@ ErrorOr<void> apply_patch(Stream& out, Vector<StringView> const& lines, Patch co
             TRY(out.write_formatted("{}\n", lines.at(line_number)));
 
         // Then output the hunk to what we hope is the correct location in the file.
-        line_number = TRY(write_hunk(out, hunk, location, lines));
+        if (define.has_value())
+            line_number = TRY(write_define_hunk(out, hunk, location, lines, define.value()));
+        else
+            line_number = TRY(write_hunk(out, hunk, location, lines));
     }
 
     // We've finished applying all hunks, write out anything from the old file we haven't already.

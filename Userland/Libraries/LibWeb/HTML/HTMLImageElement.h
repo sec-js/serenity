@@ -37,7 +37,7 @@ class HTMLImageElement final
 public:
     virtual ~HTMLImageElement() override;
 
-    virtual void attribute_changed(FlyString const& name, Optional<String> const& value) override;
+    virtual void form_associated_element_attribute_changed(FlyString const& name, Optional<String> const& value) override;
 
     String alt() const { return get_attribute_value(HTML::AttributeNames::alt); }
     String src() const { return get_attribute_value(HTML::AttributeNames::src); }
@@ -57,6 +57,12 @@ public:
     // https://html.spec.whatwg.org/multipage/embedded-content.html#dom-img-complete
     bool complete() const;
 
+    // https://html.spec.whatwg.org/multipage/embedded-content.html#dom-img-currentsrc
+    String current_src() const;
+
+    // https://html.spec.whatwg.org/multipage/embedded-content.html#dom-img-decode
+    [[nodiscard]] WebIDL::ExceptionOr<JS::NonnullGCPtr<JS::Promise>> decode() const;
+
     virtual Optional<ARIA::Role> default_role() const override;
 
     // https://html.spec.whatwg.org/multipage/images.html#img-environment-changes
@@ -74,6 +80,10 @@ public:
     // https://html.spec.whatwg.org/multipage/images.html#select-an-image-source
     [[nodiscard]] Optional<ImageSourceAndPixelDensity> select_an_image_source();
 
+    StringView decoding() const;
+
+    void set_decoding(String);
+
     void set_source_set(SourceSet);
 
     ImageRequest& current_request() { return *m_current_request; }
@@ -85,11 +95,13 @@ public:
     void upgrade_pending_request_to_current_request();
 
     // ^Layout::ImageProvider
+    virtual bool is_image_available() const override;
     virtual Optional<CSSPixels> intrinsic_width() const override;
     virtual Optional<CSSPixels> intrinsic_height() const override;
     virtual Optional<CSSPixelFraction> intrinsic_aspect_ratio() const override;
     virtual RefPtr<Gfx::ImmutableBitmap> current_image_bitmap(Gfx::IntSize = {}) const override;
     virtual void set_visible_in_viewport(bool) override;
+    virtual JS::NonnullGCPtr<DOM::Element const> to_html_element() const override { return *this; }
 
     virtual void visit_edges(Cell::Visitor&) override;
 
@@ -105,13 +117,16 @@ private:
 
     virtual void apply_presentational_hints(CSS::StyleProperties&) const override;
 
+    // https://html.spec.whatwg.org/multipage/embedded-content.html#the-img-element:dimension-attributes
+    virtual bool supports_dimension_attributes() const override { return true; }
+
     virtual JS::GCPtr<Layout::Node> create_layout_node(NonnullRefPtr<CSS::StyleProperties>) override;
 
     virtual void did_set_viewport_rect(CSSPixelRect const&) override;
 
-    void handle_successful_fetch(AK::URL const&, StringView mime_type, ImageRequest&, ByteBuffer, bool maybe_omit_events, AK::URL const& previous_url);
+    void handle_successful_fetch(URL::URL const&, StringView mime_type, ImageRequest&, ByteBuffer, bool maybe_omit_events, URL::URL const& previous_url);
     void handle_failed_fetch();
-    void add_callbacks_to_image_request(JS::NonnullGCPtr<ImageRequest>, bool maybe_omit_events, AK::URL const& url_string, AK::URL const& previous_url);
+    void add_callbacks_to_image_request(JS::NonnullGCPtr<ImageRequest>, bool maybe_omit_events, URL::URL const& url_string, URL::URL const& previous_url);
 
     void animate();
 
@@ -136,6 +151,15 @@ private:
     SourceSet m_source_set;
 
     CSSPixelSize m_last_seen_viewport_size;
+
+    // https://html.spec.whatwg.org/multipage/images.html#image-decoding-hint
+    enum class ImageDecodingHint {
+        Auto,
+        Sync,
+        Async
+    };
+
+    ImageDecodingHint m_decoding_hint = ImageDecodingHint::Auto;
 };
 
 }

@@ -19,10 +19,91 @@
 #include <LibGfx/Font/OpenType/Glyf.h>
 #include <LibGfx/Font/OpenType/Tables.h>
 #include <LibGfx/ImageFormats/PNGLoader.h>
+#include <LibGfx/Painter.h>
 #include <math.h>
 #include <sys/mman.h>
 
 namespace OpenType {
+
+namespace {
+
+class CmapCharCodeToGlyphIndex : public CharCodeToGlyphIndex {
+public:
+    static ErrorOr<NonnullOwnPtr<CharCodeToGlyphIndex>> from_slice(Optional<ReadonlyBytes>);
+
+    virtual u32 glyph_id_for_code_point(u32 code_point) const override;
+
+private:
+    explicit CmapCharCodeToGlyphIndex(Cmap cmap)
+        : m_cmap(cmap)
+    {
+    }
+
+    Cmap m_cmap;
+};
+
+ErrorOr<NonnullOwnPtr<CharCodeToGlyphIndex>> CmapCharCodeToGlyphIndex::from_slice(Optional<ReadonlyBytes> opt_cmap_slice)
+{
+    if (!opt_cmap_slice.has_value())
+        return Error::from_string_literal("Font is missing Cmap");
+
+    auto cmap = TRY(Cmap::from_slice(opt_cmap_slice.value()));
+
+    // Select cmap table. FIXME: Do this better. Right now, just looks for platform "Windows"
+    // and corresponding encoding "Unicode full repertoire", or failing that, "Unicode BMP"
+    Optional<u32> active_cmap_index;
+    for (u32 i = 0; i < cmap.num_subtables(); i++) {
+        auto opt_subtable = cmap.subtable(i);
+        if (!opt_subtable.has_value()) {
+            continue;
+        }
+        auto subtable = opt_subtable.value();
+        auto platform = subtable.platform_id();
+        if (!platform.has_value())
+            return Error::from_string_literal("Invalid Platform ID");
+
+        /* NOTE: The encoding records are sorted first by platform ID, then by encoding ID.
+           This means that the Windows platform will take precedence over Macintosh, which is
+           usually what we want here. */
+        if (platform.value() == Cmap::Subtable::Platform::Unicode) {
+            if (subtable.encoding_id() == (u16)Cmap::Subtable::UnicodeEncoding::Unicode2_0_FullRepertoire) {
+                // "Encoding ID 3 should be used in conjunction with 'cmap' subtable formats 4 or 6."
+                active_cmap_index = i;
+                break;
+            }
+            if (subtable.encoding_id() == (u16)Cmap::Subtable::UnicodeEncoding::Unicode2_0_BMP_Only) {
+                // "Encoding ID 4 should be used in conjunction with subtable formats 10 or 12."
+                active_cmap_index = i;
+                break;
+            }
+        } else if (platform.value() == Cmap::Subtable::Platform::Windows) {
+            if (subtable.encoding_id() == (u16)Cmap::Subtable::WindowsEncoding::UnicodeFullRepertoire) {
+                active_cmap_index = i;
+                break;
+            }
+            if (subtable.encoding_id() == (u16)Cmap::Subtable::WindowsEncoding::UnicodeBMP) {
+                active_cmap_index = i;
+                break;
+            }
+        } else if (platform.value() == Cmap::Subtable::Platform::Macintosh) {
+            active_cmap_index = i;
+            // Intentionally no `break` so that Windows (value 3) wins over Macintosh (value 1).
+        }
+    }
+    if (!active_cmap_index.has_value())
+        return Error::from_string_literal("No suitable cmap subtable found");
+    TRY(cmap.subtable(active_cmap_index.value()).value().validate_format_can_be_read());
+    cmap.set_active_index(active_cmap_index.value());
+
+    return adopt_nonnull_own_or_enomem(new CmapCharCodeToGlyphIndex(cmap));
+}
+
+u32 CmapCharCodeToGlyphIndex::glyph_id_for_code_point(u32 code_point) const
+{
+    return m_cmap.glyph_id_for_code_point(code_point);
+}
+
+}
 
 // https://learn.microsoft.com/en-us/typography/opentype/spec/otff#ttc-header
 struct [[gnu::packed]] TTCHeaderV1 {
@@ -71,45 +152,67 @@ float be_fword(u8 const* ptr)
 
 ErrorOr<NonnullRefPtr<Font>> Font::try_load_from_resource(Core::Resource const& resource, unsigned index)
 {
-    auto font = TRY(try_load_from_externally_owned_memory(resource.data(), index));
+    auto font = TRY(try_load_from_externally_owned_memory(resource.data(), { .index = index }));
     font->m_resource = resource;
     return font;
 }
 
-ErrorOr<NonnullRefPtr<Font>> Font::try_load_from_externally_owned_memory(ReadonlyBytes buffer, unsigned index)
+static ErrorOr<Tag> read_tag(ReadonlyBytes buffer)
 {
     FixedMemoryStream stream { buffer };
+    return stream.read_value<Tag>();
+}
 
-    auto tag = TRY(stream.read_value<Tag>());
-    if (tag == Tag("ttcf")) {
+ErrorOr<NonnullRefPtr<Font>> Font::try_load_from_externally_owned_memory(ReadonlyBytes buffer, Options options)
+{
+    auto tag = TRY(read_tag(buffer));
+    if (tag == HeaderTag_FontCollection) {
         // It's a font collection
-        TRY(stream.seek(0, SeekMode::SetPosition));
+        FixedMemoryStream stream { buffer };
         auto ttc_header_v1 = TRY(stream.read_in_place<TTCHeaderV1>());
         // FIXME: Check for major_version == 2.
 
-        if (index >= ttc_header_v1->num_fonts)
+        if (options.index >= ttc_header_v1->num_fonts)
             return Error::from_string_literal("Requested font index is too large");
 
-        TRY(stream.seek(ttc_header_v1->table_directory_offsets + sizeof(u32) * index, SeekMode::SetPosition));
+        TRY(stream.seek(ttc_header_v1->table_directory_offsets + sizeof(u32) * options.index, SeekMode::SetPosition));
         auto offset = TRY(stream.read_value<BigEndian<u32>>());
-        return try_load_from_offset(buffer, offset);
+        return try_load_from_offset(buffer, offset, move(options));
     }
-    if (tag == Tag("OTTO"))
+    if (tag == HeaderTag_CFFOutlines)
         return Error::from_string_literal("CFF fonts not supported yet");
 
-    if (tag.to_u32() != 0x00010000 && tag != Tag("true"))
+    if (tag != HeaderTag_TrueTypeOutlines && tag != HeaderTag_TrueTypeOutlinesApple)
         return Error::from_string_literal("Not a valid font");
 
-    return try_load_from_offset(buffer, 0);
+    return try_load_from_offset(buffer, 0, move(options));
 }
 
-// FIXME: "loca" and "glyf" are not available for CFF fonts.
-ErrorOr<NonnullRefPtr<Font>> Font::try_load_from_offset(ReadonlyBytes buffer, u32 offset)
+static ErrorOr<void> for_each_table_record(ReadonlyBytes buffer, u32 offset, Function<ErrorOr<void>(Tag, ReadonlyBytes)> callback)
 {
     FixedMemoryStream stream { buffer };
     TRY(stream.seek(offset, AK::SeekMode::SetPosition));
-    auto& table_directory = *TRY(stream.read_in_place<TableDirectory const>());
 
+    auto& table_directory = *TRY(stream.read_in_place<TableDirectory const>());
+    for (auto i = 0; i < table_directory.num_tables; i++) {
+        auto& table_record = *TRY(stream.read_in_place<TableRecord const>());
+
+        if (Checked<u32>::addition_would_overflow(static_cast<u32>(table_record.offset), static_cast<u32>(table_record.length)))
+            return Error::from_string_literal("Invalid table offset or length in font");
+
+        if (buffer.size() < table_record.offset + table_record.length)
+            return Error::from_string_literal("Font file too small");
+
+        auto buffer_here = buffer.slice(table_record.offset, table_record.length);
+        TRY(callback(table_record.table_tag, buffer_here));
+    }
+
+    return {};
+}
+
+// FIXME: "loca" and "glyf" are not available for CFF fonts.
+ErrorOr<NonnullRefPtr<Font>> Font::try_load_from_offset(ReadonlyBytes buffer, u32 offset, Options options)
+{
     Optional<ReadonlyBytes> opt_head_slice = {};
     Optional<ReadonlyBytes> opt_name_slice = {};
     Optional<ReadonlyBytes> opt_hhea_slice = {};
@@ -127,58 +230,52 @@ ErrorOr<NonnullRefPtr<Font>> Font::try_load_from_offset(ReadonlyBytes buffer, u3
     Optional<CBDT> cbdt;
     Optional<GPOS> gpos;
 
-    for (auto i = 0; i < table_directory.num_tables; i++) {
-        auto& table_record = *TRY(stream.read_in_place<TableRecord const>());
-
-        if (table_record.length == 0 || Checked<u32>::addition_would_overflow(static_cast<u32>(table_record.offset), static_cast<u32>(table_record.length)))
-            return Error::from_string_literal("Invalid table offset or length in font");
-
-        if (buffer.size() < table_record.offset + table_record.length)
-            return Error::from_string_literal("Font file too small");
-
-        auto buffer_here = buffer.slice(table_record.offset, table_record.length);
-
+    TRY(for_each_table_record(buffer, offset, [&](Tag table_tag, ReadonlyBytes tag_buffer) -> ErrorOr<void> {
         // Get the table offsets we need.
-        if (table_record.table_tag == Tag("head")) {
-            opt_head_slice = buffer_here;
-        } else if (table_record.table_tag == Tag("name")) {
-            opt_name_slice = buffer_here;
-        } else if (table_record.table_tag == Tag("hhea")) {
-            opt_hhea_slice = buffer_here;
-        } else if (table_record.table_tag == Tag("maxp")) {
-            opt_maxp_slice = buffer_here;
-        } else if (table_record.table_tag == Tag("hmtx")) {
-            opt_hmtx_slice = buffer_here;
-        } else if (table_record.table_tag == Tag("cmap")) {
-            opt_cmap_slice = buffer_here;
-        } else if (table_record.table_tag == Tag("loca")) {
-            opt_loca_slice = buffer_here;
-        } else if (table_record.table_tag == Tag("glyf")) {
-            opt_glyf_slice = buffer_here;
-        } else if (table_record.table_tag == Tag("OS/2")) {
-            opt_os2_slice = buffer_here;
-        } else if (table_record.table_tag == Tag("kern")) {
-            opt_kern_slice = buffer_here;
-        } else if (table_record.table_tag == Tag("fpgm")) {
-            opt_fpgm_slice = buffer_here;
-        } else if (table_record.table_tag == Tag("prep")) {
-            opt_prep_slice = buffer_here;
-        } else if (table_record.table_tag == Tag("CBLC")) {
-            cblc = TRY(CBLC::from_slice(buffer_here));
-        } else if (table_record.table_tag == Tag("CBDT")) {
-            cbdt = TRY(CBDT::from_slice(buffer_here));
-        } else if (table_record.table_tag == Tag("GPOS")) {
-            gpos = TRY(GPOS::from_slice(buffer_here));
+        if (table_tag == Tag("head")) {
+            opt_head_slice = tag_buffer;
+        } else if (table_tag == Tag("name")) {
+            opt_name_slice = tag_buffer;
+        } else if (table_tag == Tag("hhea")) {
+            opt_hhea_slice = tag_buffer;
+        } else if (table_tag == Tag("maxp")) {
+            opt_maxp_slice = tag_buffer;
+        } else if (table_tag == Tag("hmtx")) {
+            opt_hmtx_slice = tag_buffer;
+        } else if (table_tag == Tag("cmap")) {
+            opt_cmap_slice = tag_buffer;
+        } else if (table_tag == Tag("loca")) {
+            opt_loca_slice = tag_buffer;
+        } else if (table_tag == Tag("glyf")) {
+            opt_glyf_slice = tag_buffer;
+        } else if (table_tag == Tag("OS/2")) {
+            opt_os2_slice = tag_buffer;
+        } else if (table_tag == Tag("kern")) {
+            opt_kern_slice = tag_buffer;
+        } else if (table_tag == Tag("fpgm")) {
+            opt_fpgm_slice = tag_buffer;
+        } else if (table_tag == Tag("prep")) {
+            opt_prep_slice = tag_buffer;
+        } else if (table_tag == Tag("CBLC")) {
+            cblc = TRY(CBLC::from_slice(tag_buffer));
+        } else if (table_tag == Tag("CBDT")) {
+            cbdt = TRY(CBDT::from_slice(tag_buffer));
+        } else if (table_tag == Tag("GPOS")) {
+            gpos = TRY(GPOS::from_slice(tag_buffer));
         }
-    }
+        return {};
+    }));
 
     if (!opt_head_slice.has_value())
         return Error::from_string_literal("Font is missing Head");
     auto head = TRY(Head::from_slice(opt_head_slice.value()));
 
-    if (!opt_name_slice.has_value())
-        return Error::from_string_literal("Font is missing Name");
-    auto name = TRY(Name::from_slice(opt_name_slice.value()));
+    Optional<Name> name;
+    if (!(options.skip_tables & Options::SkipTables::Name)) {
+        if (!opt_name_slice.has_value())
+            return Error::from_string_literal("Font is missing Name");
+        name = TRY(Name::from_slice(opt_name_slice.value()));
+    }
 
     if (!opt_hhea_slice.has_value())
         return Error::from_string_literal("Font is missing Hhea");
@@ -188,13 +285,21 @@ ErrorOr<NonnullRefPtr<Font>> Font::try_load_from_offset(ReadonlyBytes buffer, u3
         return Error::from_string_literal("Font is missing Maxp");
     auto maxp = TRY(Maxp::from_slice(opt_maxp_slice.value()));
 
-    if (!opt_hmtx_slice.has_value())
+    bool can_omit_hmtx = (options.skip_tables & Options::SkipTables::Hmtx);
+    Optional<Hmtx> hmtx;
+    if (opt_hmtx_slice.has_value()) {
+        auto hmtx_or_error = Hmtx::from_slice(opt_hmtx_slice.value(), maxp.num_glyphs(), hhea.number_of_h_metrics());
+        if (!hmtx_or_error.is_error())
+            hmtx = hmtx_or_error.release_value();
+        else if (!can_omit_hmtx)
+            return hmtx_or_error.release_error();
+    } else if (!can_omit_hmtx) {
         return Error::from_string_literal("Font is missing Hmtx");
-    auto hmtx = TRY(Hmtx::from_slice(opt_hmtx_slice.value(), maxp.num_glyphs(), hhea.number_of_h_metrics()));
+    }
 
-    if (!opt_cmap_slice.has_value())
+    if (!options.external_cmap && !opt_cmap_slice.has_value())
         return Error::from_string_literal("Font is missing Cmap");
-    auto cmap = TRY(Cmap::from_slice(opt_cmap_slice.value()));
+    NonnullOwnPtr<CharCodeToGlyphIndex> cmap = options.external_cmap ? options.external_cmap.release_nonnull() : TRY(CmapCharCodeToGlyphIndex::from_slice(opt_cmap_slice.value()));
 
     Optional<Loca> loca;
     if (opt_loca_slice.has_value())
@@ -206,8 +311,13 @@ ErrorOr<NonnullRefPtr<Font>> Font::try_load_from_offset(ReadonlyBytes buffer, u3
     }
 
     Optional<OS2> os2;
-    if (opt_os2_slice.has_value())
-        os2 = TRY(OS2::from_slice(opt_os2_slice.value()));
+    if (opt_os2_slice.has_value()) {
+        auto os2_or_error = OS2::from_slice(opt_os2_slice.value());
+        if (!os2_or_error.is_error())
+            os2 = os2_or_error.release_value();
+        else if (!(options.skip_tables & Options::SkipTables::OS2))
+            return os2_or_error.release_error();
+    }
 
     Optional<Kern> kern {};
     if (opt_kern_slice.has_value())
@@ -220,35 +330,6 @@ ErrorOr<NonnullRefPtr<Font>> Font::try_load_from_offset(ReadonlyBytes buffer, u3
     Optional<Prep> prep;
     if (opt_prep_slice.has_value())
         prep = Prep(opt_prep_slice.value());
-
-    // Select cmap table. FIXME: Do this better. Right now, just looks for platform "Windows"
-    // and corresponding encoding "Unicode full repertoire", or failing that, "Unicode BMP"
-    for (u32 i = 0; i < cmap.num_subtables(); i++) {
-        auto opt_subtable = cmap.subtable(i);
-        if (!opt_subtable.has_value()) {
-            continue;
-        }
-        auto subtable = opt_subtable.value();
-        auto platform = subtable.platform_id();
-        if (!platform.has_value())
-            return Error::from_string_literal("Invalid Platform ID");
-
-        /* NOTE: The encoding records are sorted first by platform ID, then by encoding ID.
-           This means that the Windows platform will take precedence over Macintosh, which is
-           usually what we want here. */
-        if (platform.value() == Cmap::Subtable::Platform::Windows) {
-            if (subtable.encoding_id() == (u16)Cmap::Subtable::WindowsEncoding::UnicodeFullRepertoire) {
-                cmap.set_active_index(i);
-                break;
-            }
-            if (subtable.encoding_id() == (u16)Cmap::Subtable::WindowsEncoding::UnicodeBMP) {
-                cmap.set_active_index(i);
-                break;
-            }
-        } else if (platform.value() == Cmap::Subtable::Platform::Macintosh) {
-            cmap.set_active_index(i);
-        }
-    }
 
     return adopt_ref(*new Font(
         move(head),
@@ -333,6 +414,21 @@ Font::EmbeddedBitmapData Font::embedded_bitmap_data_for_glyph(u32 glyph_id) cons
     return Empty {};
 }
 
+float Font::glyph_advance(u32 glyph_id, float x_scale, float y_scale, float point_width, float point_height) const
+{
+    if (has_color_bitmaps())
+        return glyph_metrics(glyph_id, x_scale, y_scale, point_width, point_height).advance_width;
+
+    if (!m_hmtx.has_value())
+        return 0;
+
+    if (glyph_id >= glyph_count())
+        glyph_id = 0;
+
+    auto horizontal_metrics = m_hmtx->get_glyph_horizontal_metrics(glyph_id);
+    return static_cast<float>(horizontal_metrics.advance_width) * x_scale;
+}
+
 Gfx::ScaledGlyphMetrics Font::glyph_metrics(u32 glyph_id, float x_scale, float y_scale, float point_width, float point_height) const
 {
     auto embedded_bitmap_metrics = embedded_bitmap_data_for_glyph(glyph_id).visit(
@@ -341,8 +437,8 @@ Gfx::ScaledGlyphMetrics Font::glyph_metrics(u32 glyph_id, float x_scale, float y
             //        the pixels-per-em values and the font point size. It appears that bitmaps are not in the same
             //        coordinate space as the head table's "units per em" value.
             //        There's definitely some cleaner way to do this.
-            float x_scale = (point_width * 1.3333333f) / static_cast<float>(data.bitmap_size.ppem_x);
-            float y_scale = (point_height * 1.3333333f) / static_cast<float>(data.bitmap_size.ppem_y);
+            float x_scale = (point_width * DEFAULT_DPI) / (POINTS_PER_INCH * data.bitmap_size.ppem_x);
+            float y_scale = (point_height * DEFAULT_DPI) / (POINTS_PER_INCH * data.bitmap_size.ppem_y);
 
             return Gfx::ScaledGlyphMetrics {
                 .ascender = static_cast<float>(data.bitmap_size.hori.ascender) * y_scale,
@@ -360,14 +456,14 @@ Gfx::ScaledGlyphMetrics Font::glyph_metrics(u32 glyph_id, float x_scale, float y
         return embedded_bitmap_metrics.release_value();
     }
 
-    if (!m_loca.has_value() || !m_glyf.has_value()) {
+    if (!m_loca.has_value() || !m_glyf.has_value() || !m_hmtx.has_value()) {
         return Gfx::ScaledGlyphMetrics {};
     }
 
     if (glyph_id >= glyph_count()) {
         glyph_id = 0;
     }
-    auto horizontal_metrics = m_hmtx.get_glyph_horizontal_metrics(glyph_id);
+    auto horizontal_metrics = m_hmtx->get_glyph_horizontal_metrics(glyph_id);
     auto glyph_offset = m_loca->get_glyph_offset(glyph_id);
     auto glyph = m_glyf->glyph(glyph_offset);
     return Gfx::ScaledGlyphMetrics {
@@ -495,12 +591,15 @@ u16 Font::units_per_em() const
 
 String Font::family() const
 {
+    if (!m_name.has_value())
+        return {};
+
     if (!m_family.has_value()) {
         m_family = [&] {
-            auto string = m_name.typographic_family_name();
+            auto string = m_name->typographic_family_name();
             if (!string.is_empty())
                 return string;
-            return m_name.family_name();
+            return m_name->family_name();
         }();
     }
     return *m_family;
@@ -508,10 +607,13 @@ String Font::family() const
 
 String Font::variant() const
 {
-    auto string = m_name.typographic_subfamily_name();
+    if (!m_name.has_value())
+        return {};
+
+    auto string = m_name->typographic_subfamily_name();
     if (!string.is_empty())
         return string;
-    return m_name.subfamily_name();
+    return m_name->subfamily_name();
 }
 
 u16 Font::weight() const
@@ -627,7 +729,7 @@ void Font::populate_glyph_page(GlyphPage& glyph_page, size_t page_index) const
     u32 first_code_point = page_index * GlyphPage::glyphs_per_page;
     for (size_t i = 0; i < GlyphPage::glyphs_per_page; ++i) {
         u32 code_point = first_code_point + i;
-        glyph_page.glyph_ids[i] = m_cmap.glyph_id_for_code_point(code_point);
+        glyph_page.glyph_ids[i] = m_cmap->glyph_id_for_code_point(code_point);
     }
 }
 bool Font::has_color_bitmaps() const

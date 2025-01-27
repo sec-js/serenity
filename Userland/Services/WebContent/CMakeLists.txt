@@ -3,7 +3,7 @@ include(accelerated_graphics)
 serenity_component(
     WebContent
     TARGETS WebContent
-    DEPENDS ImageDecoder RequestServer WebSocket
+    DEPENDS ImageDecoder RequestServer
 )
 
 compile_ipc(WebContentServer.ipc WebContentServerEndpoint.h)
@@ -31,8 +31,7 @@ set(GENERATED_SOURCES
 )
 
 serenity_bin(WebContent)
-target_link_libraries(WebContent PRIVATE LibCore LibFileSystem LibIPC LibGfx LibAudio LibImageDecoderClient LibJS LibWebView LibWeb LibLocale LibMain)
-link_with_locale_data(WebContent)
+target_link_libraries(WebContent PRIVATE LibCore LibFileSystem LibIPC LibGfx LibAudio LibImageDecoderClient LibJS LibWebView LibWeb LibLocale LibMain LibURL)
 
 if (HAS_ACCELERATED_GRAPHICS)
     target_compile_definitions(WebContent PRIVATE HAS_ACCELERATED_GRAPHICS)

@@ -5,11 +5,11 @@
  */
 
 #include <AK/JsonObject.h>
-#include <AK/URL.h>
 #include <LaunchServer/LaunchClientEndpoint.h>
 #include <LaunchServer/LaunchServerEndpoint.h>
 #include <LibDesktop/Launcher.h>
 #include <LibIPC/ConnectionToServer.h>
+#include <LibURL/URL.h>
 
 namespace Desktop {
 
@@ -20,6 +20,11 @@ auto Launcher::Details::from_details_str(ByteString const& details_str) -> Nonnu
     auto const& obj = json.as_object();
     details->executable = obj.get_byte_string("executable"sv).value_or({});
     details->name = obj.get_byte_string("name"sv).value_or({});
+
+    obj.get_array("arguments"sv).value().for_each([&](JsonValue const& argument) {
+        details->arguments.append(argument.as_string());
+    });
+
     if (auto type_value = obj.get_byte_string("type"sv); type_value.has_value()) {
         auto const& type_str = type_value.value();
         if (type_str == "app")
@@ -54,7 +59,7 @@ void Launcher::ensure_connection()
     [[maybe_unused]] auto& conn = connection();
 }
 
-ErrorOr<void> Launcher::add_allowed_url(URL const& url)
+ErrorOr<void> Launcher::add_allowed_url(URL::URL const& url)
 {
     auto response_or_error = connection().try_add_allowed_url(url);
     if (response_or_error.is_error())
@@ -70,7 +75,7 @@ ErrorOr<void> Launcher::add_allowed_handler_with_any_url(ByteString const& handl
     return {};
 }
 
-ErrorOr<void> Launcher::add_allowed_handler_with_only_specific_urls(ByteString const& handler, Vector<URL> const& urls)
+ErrorOr<void> Launcher::add_allowed_handler_with_only_specific_urls(ByteString const& handler, Vector<URL::URL> const& urls)
 {
     auto response_or_error = connection().try_add_allowed_handler_with_only_specific_urls(handler, urls);
     if (response_or_error.is_error())
@@ -86,23 +91,23 @@ ErrorOr<void> Launcher::seal_allowlist()
     return {};
 }
 
-bool Launcher::open(const URL& url, ByteString const& handler_name)
+bool Launcher::open(const URL::URL& url, ByteString const& handler_name)
 {
     return connection().open_url(url, handler_name);
 }
 
-bool Launcher::open(const URL& url, Details const& details)
+bool Launcher::open(const URL::URL& url, Details const& details)
 {
     VERIFY(details.launcher_type != LauncherType::Application); // Launcher should not be used to execute arbitrary applications
     return open(url, details.executable);
 }
 
-Vector<ByteString> Launcher::get_handlers_for_url(const URL& url)
+Vector<ByteString> Launcher::get_handlers_for_url(const URL::URL& url)
 {
     return connection().get_handlers_for_url(url.to_byte_string());
 }
 
-auto Launcher::get_handlers_with_details_for_url(const URL& url) -> Vector<NonnullRefPtr<Details>>
+auto Launcher::get_handlers_with_details_for_url(const URL::URL& url) -> Vector<NonnullRefPtr<Details>>
 {
     auto details = connection().get_handlers_with_details_for_url(url.to_byte_string());
     Vector<NonnullRefPtr<Details>> handlers_with_details;

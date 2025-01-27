@@ -6,12 +6,12 @@
 
 #include <AK/LexicalPath.h>
 #include <AK/Queue.h>
-#include <AK/URL.h>
-#include <AK/URLParser.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
 #include <LibFileSystem/FileSystem.h>
 #include <LibMain/Main.h>
+#include <LibURL/Parser.h>
+#include <LibURL/URL.h>
 #include <LibXML/DOM/Document.h>
 #include <LibXML/DOM/Node.h>
 #include <LibXML/Parser/Parser.h>
@@ -362,16 +362,16 @@ static auto parse(StringView contents)
         contents,
         {
             .preserve_comments = true,
-            .resolve_external_resource = [&](XML::SystemID const& system_id, Optional<XML::PublicID> const&) -> ErrorOr<ByteString> {
+            .resolve_external_resource = [&](XML::SystemID const& system_id, Optional<XML::PublicID> const&) -> ErrorOr<Variant<ByteString, Vector<XML::MarkupDeclaration>>> {
                 auto base = URL::create_with_file_scheme(s_path);
-                auto url = URLParser::basic_parse(system_id.system_literal, base);
+                auto url = URL::Parser::basic_parse(system_id.system_literal, base);
                 if (!url.is_valid())
                     return Error::from_string_literal("Invalid URL");
 
                 if (url.scheme() != "file")
                     return Error::from_string_literal("NYI: Nonlocal entity");
 
-                auto file = TRY(Core::File::open(url.serialize_path(), Core::File::OpenMode::Read));
+                auto file = TRY(Core::File::open(URL::percent_decode(url.serialize_path()), Core::File::OpenMode::Read));
                 return ByteString::copy(TRY(file->read_until_eof()));
             },
         },
@@ -440,7 +440,7 @@ static void do_run_tests(XML::Document& document)
                 continue;
             }
 
-            auto file_path = url.serialize_path();
+            auto file_path = URL::percent_decode(url.serialize_path());
             auto file_result = Core::File::open(file_path, Core::File::OpenMode::Read);
             if (file_result.is_error()) {
                 warnln("Read error for {}: {}", file_path, file_result.error());

@@ -12,15 +12,15 @@
 #include <AK/Forward.h>
 #include <AK/Optional.h>
 #include <AK/String.h>
-#include <AK/URL.h>
 #include <AK/Variant.h>
 #include <AK/Vector.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Heap/Cell.h>
 #include <LibJS/Heap/GCPtr.h>
+#include <LibURL/Origin.h>
+#include <LibURL/URL.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Headers.h>
-#include <LibWeb/HTML/Origin.h>
 #include <LibWeb/HTML/PolicyContainers.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 
@@ -56,6 +56,7 @@ public:
         Frame,
         IFrame,
         Image,
+        JSON,
         Manifest,
         Object,
         PaintWorklet,
@@ -158,14 +159,21 @@ public:
         Auto
     };
 
+    // AD-HOC: Some web features need to receive data as it arrives, rather than when the response is fully complete
+    //         or when enough data has been buffered. Use this buffer policy to inform fetch of that requirement.
+    enum class BufferPolicy {
+        BufferResponse,
+        DoNotBufferResponse,
+    };
+
     // Members are implementation-defined
     struct InternalPriority { };
 
     using BodyType = Variant<Empty, ByteBuffer, JS::NonnullGCPtr<Body>>;
-    using OriginType = Variant<Origin, HTML::Origin>;
+    using OriginType = Variant<Origin, URL::Origin>;
     using PolicyContainerType = Variant<PolicyContainer, HTML::PolicyContainer>;
-    using ReferrerType = Variant<Referrer, AK::URL>;
-    using ReservedClientType = Variant<Empty, HTML::Environment*, JS::GCPtr<HTML::EnvironmentSettingsObject>>;
+    using ReferrerType = Variant<Referrer, URL::URL>;
+    using ReservedClientType = JS::GCPtr<HTML::Environment>;
     using WindowType = Variant<Window, JS::GCPtr<HTML::EnvironmentSettingsObject>>;
 
     [[nodiscard]] static JS::NonnullGCPtr<Request> create(JS::VM&);
@@ -263,9 +271,9 @@ public:
     [[nodiscard]] bool render_blocking() const { return m_render_blocking; }
     void set_render_blocking(bool render_blocking) { m_render_blocking = render_blocking; }
 
-    [[nodiscard]] Vector<AK::URL> const& url_list() const { return m_url_list; }
-    [[nodiscard]] Vector<AK::URL>& url_list() { return m_url_list; }
-    void set_url_list(Vector<AK::URL> url_list) { m_url_list = move(url_list); }
+    [[nodiscard]] Vector<URL::URL> const& url_list() const { return m_url_list; }
+    [[nodiscard]] Vector<URL::URL>& url_list() { return m_url_list; }
+    void set_url_list(Vector<URL::URL> url_list) { m_url_list = move(url_list); }
 
     [[nodiscard]] u8 redirect_count() const { return m_redirect_count; }
     void set_redirect_count(u8 redirect_count) { m_redirect_count = redirect_count; }
@@ -273,8 +281,8 @@ public:
     [[nodiscard]] ReferrerType const& referrer() const { return m_referrer; }
     void set_referrer(ReferrerType referrer) { m_referrer = move(referrer); }
 
-    [[nodiscard]] Optional<ReferrerPolicy::ReferrerPolicy> const& referrer_policy() const { return m_referrer_policy; }
-    void set_referrer_policy(Optional<ReferrerPolicy::ReferrerPolicy> referrer_policy) { m_referrer_policy = move(referrer_policy); }
+    [[nodiscard]] ReferrerPolicy::ReferrerPolicy const& referrer_policy() const { return m_referrer_policy; }
+    void set_referrer_policy(ReferrerPolicy::ReferrerPolicy referrer_policy) { m_referrer_policy = move(referrer_policy); }
 
     [[nodiscard]] ResponseTainting response_tainting() const { return m_response_tainting; }
     void set_response_tainting(ResponseTainting response_tainting) { m_response_tainting = response_tainting; }
@@ -288,11 +296,11 @@ public:
     [[nodiscard]] bool timing_allow_failed() const { return m_timing_allow_failed; }
     void set_timing_allow_failed(bool timing_allow_failed) { m_timing_allow_failed = timing_allow_failed; }
 
-    [[nodiscard]] AK::URL& url();
-    [[nodiscard]] AK::URL const& url() const;
-    [[nodiscard]] AK::URL& current_url();
-    [[nodiscard]] AK::URL const& current_url() const;
-    void set_url(AK::URL url);
+    [[nodiscard]] URL::URL& url();
+    [[nodiscard]] URL::URL const& url() const;
+    [[nodiscard]] URL::URL& current_url();
+    [[nodiscard]] URL::URL const& current_url() const;
+    void set_url(URL::URL url);
 
     [[nodiscard]] bool destination_is_script_like() const;
 
@@ -302,13 +310,13 @@ public:
 
     [[nodiscard]] bool has_redirect_tainted_origin() const;
 
-    [[nodiscard]] ErrorOr<String> serialize_origin() const;
-    [[nodiscard]] ErrorOr<ByteBuffer> byte_serialize_origin() const;
+    [[nodiscard]] String serialize_origin() const;
+    [[nodiscard]] ByteBuffer byte_serialize_origin() const;
 
     [[nodiscard]] JS::NonnullGCPtr<Request> clone(JS::Realm&) const;
 
-    [[nodiscard]] ErrorOr<void> add_range_header(u64 first, Optional<u64> const& last);
-    [[nodiscard]] ErrorOr<void> add_origin_header();
+    void add_range_header(u64 first, Optional<u64> const& last);
+    void add_origin_header();
 
     [[nodiscard]] bool cross_origin_embedder_policy_allows_credentials() const;
 
@@ -323,6 +331,9 @@ public:
     {
         m_pending_responses.remove_first_matching([&](auto gc_ptr) { return gc_ptr == pending_response; });
     }
+
+    [[nodiscard]] BufferPolicy buffer_policy() const { return m_buffer_policy; }
+    void set_buffer_policy(BufferPolicy buffer_policy) { m_buffer_policy = buffer_policy; }
 
 private:
     explicit Request(JS::NonnullGCPtr<HeaderList>);
@@ -388,7 +399,7 @@ private:
 
     // https://fetch.spec.whatwg.org/#concept-request-destination
     // A request has an associated destination, which is the empty string, "audio", "audioworklet", "document",
-    // "embed", "font", "frame", "iframe", "image", "manifest", "object", "paintworklet", "report", "script",
+    // "embed", "font", "frame", "iframe", "image", "json", "manifest", "object", "paintworklet", "report", "script",
     // "serviceworker", "sharedworker", "style", "track", "video", "webidentity", "worker", or "xslt". Unless stated
     // otherwise it is the empty string.
     // NOTE: These are reflected on RequestDestination except for "serviceworker" and "webidentity" as fetches with
@@ -420,7 +431,7 @@ private:
     // https://fetch.spec.whatwg.org/#concept-request-referrer-policy
     // A request has an associated referrer policy, which is a referrer policy. Unless stated otherwise it is the empty
     // string.
-    Optional<ReferrerPolicy::ReferrerPolicy> m_referrer_policy;
+    ReferrerPolicy::ReferrerPolicy m_referrer_policy { ReferrerPolicy::ReferrerPolicy::EmptyString };
 
     // https://fetch.spec.whatwg.org/#concept-request-mode
     // A request has an associated mode, which is "same-origin", "cors", "no-cors", "navigate", or "websocket". Unless
@@ -487,7 +498,7 @@ private:
     // https://fetch.spec.whatwg.org/#concept-request-url-list
     // A request has an associated URL list (a list of one or more URLs). Unless stated otherwise, it is a list
     // containing a copy of request’s URL.
-    Vector<AK::URL> m_url_list;
+    Vector<URL::URL> m_url_list;
 
     // https://fetch.spec.whatwg.org/#concept-request-redirect-count
     // A request has an associated redirect count. Unless stated otherwise, it is zero.
@@ -514,6 +525,13 @@ private:
 
     // Non-standard
     Vector<JS::NonnullGCPtr<Fetching::PendingResponse>> m_pending_responses;
+
+    BufferPolicy m_buffer_policy { BufferPolicy::BufferResponse };
 };
+
+StringView request_destination_to_string(Request::Destination);
+StringView request_mode_to_string(Request::Mode);
+
+Optional<Request::Priority> request_priority_from_string(StringView);
 
 }

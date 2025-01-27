@@ -5,11 +5,11 @@
  */
 
 #include <AK/String.h>
-#include <AK/URL.h>
+#include <LibURL/Origin.h>
+#include <LibURL/URL.h>
 #include <LibWeb/DOM/Document.h>
-#include <LibWeb/HTML/Origin.h>
+#include <LibWeb/DOMURL/DOMURL.h>
 #include <LibWeb/PermissionsPolicy/AutoplayAllowlist.h>
-#include <LibWeb/URL/URL.h>
 
 // FIXME: This is an ad-hoc implementation of the "autoplay" policy-controlled feature:
 // https://w3c.github.io/webappsec-permissions-policy/#policy-controlled-feature
@@ -26,7 +26,7 @@ AutoplayAllowlist::AutoplayAllowlist() = default;
 AutoplayAllowlist::~AutoplayAllowlist() = default;
 
 // https://w3c.github.io/webappsec-permissions-policy/#is-feature-enabled
-Decision AutoplayAllowlist::is_allowed_for_origin(DOM::Document const& document, HTML::Origin const& origin) const
+Decision AutoplayAllowlist::is_allowed_for_origin(DOM::Document const& document, URL::Origin const& origin) const
 {
     // FIXME: 1. Let policy be document’s Permissions Policy
     // FIXME: 2. If policy’s inherited policy for feature is Disabled, return "Disabled".
@@ -73,7 +73,7 @@ ErrorOr<void> AutoplayAllowlist::enable_for_origins(ReadonlySpan<String> origins
     TRY(allowlist.try_ensure_capacity(origins.size()));
 
     for (auto const& origin : origins) {
-        AK::URL url { origin };
+        URL::URL url { origin };
 
         if (!url.is_valid())
             url = TRY(String::formatted("https://{}", origin));
@@ -82,7 +82,7 @@ ErrorOr<void> AutoplayAllowlist::enable_for_origins(ReadonlySpan<String> origins
             continue;
         }
 
-        TRY(allowlist.try_append(URL::url_origin(url)));
+        TRY(allowlist.try_append(url.origin()));
     }
 
     return {};

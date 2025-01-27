@@ -7,6 +7,7 @@
 #include <AK/LexicalPath.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/ConfigFile.h>
+#include <LibCore/Environment.h>
 #include <LibCore/System.h>
 #include <LibCoredump/Backtrace.h>
 #include <LibFileSystem/FileSystem.h>
@@ -280,7 +281,7 @@ FileResult TestRunner::run_test_file(ByteString const& test_path)
             break; // we'll end up with a failure
 
         if (WIFEXITED(wstatus)) {
-            if (wstatus == 0) {
+            if (WEXITSTATUS(wstatus) == 0) {
                 test_result = Test::Result::Pass;
             }
             break;
@@ -351,7 +352,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     args_parser.add_option(print_all_output, "Show all test output", "verbose", 'v');
     args_parser.add_option(run_benchmarks, "Run benchmarks as well", "benchmarks", 'b');
     args_parser.add_option(run_skipped_tests, "Run all matching tests, even those marked as 'skip'", "all", 'a');
-    args_parser.add_option(unlink_coredumps, "Unlink coredumps after printing backtraces", "unlink-coredumps", 0);
+    args_parser.add_option(unlink_coredumps, "Unlink coredumps after printing backtraces", "unlink-coredumps");
     args_parser.add_option(test_glob, "Only run tests matching the given glob", "filter", 'f', "glob");
     args_parser.add_option(exclude_pattern, "Regular expression to use to exclude paths from being considered tests", "exclude-pattern", 'e', "pattern");
     args_parser.add_option(config_file, "Configuration file to use", "config-file", 'c', "filename");
@@ -360,15 +361,14 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 
     test_glob = ByteString::formatted("*{}*", test_glob);
 
-    if (getenv("DISABLE_DBG_OUTPUT")) {
+    if (Core::Environment::has("DISABLE_DBG_OUTPUT"sv))
         AK::set_debug_enabled(false);
-    }
 
     // Make UBSAN deadly for all tests we run by default.
-    TRY(Core::System::setenv("UBSAN_OPTIONS"sv, "halt_on_error=1"sv, true));
+    TRY(Core::Environment::set("UBSAN_OPTIONS"sv, "halt_on_error=1"sv, Core::Environment::Overwrite::Yes));
 
     if (!run_benchmarks)
-        TRY(Core::System::setenv("TESTS_ONLY"sv, "1"sv, true));
+        TRY(Core::Environment::set("TESTS_ONLY"sv, "1"sv, Core::Environment::Overwrite::Yes));
 
     ByteString test_root;
 

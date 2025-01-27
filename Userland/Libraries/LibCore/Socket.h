@@ -20,6 +20,16 @@ namespace Core {
 /// classes. Sockets are non-seekable streams which can be read byte-wise.
 class Socket : public Stream {
 public:
+    enum class PreventSIGPIPE {
+        No,
+        Yes,
+    };
+
+    enum class SocketType {
+        Stream,
+        Datagram,
+    };
+
     Socket(Socket&&) = default;
     Socket& operator=(Socket&&) = default;
 
@@ -46,12 +56,11 @@ public:
     /// Conversely, set_notifications_enabled(true) will re-enable notifications.
     virtual void set_notifications_enabled(bool) { }
 
-    Function<void()> on_ready_to_read;
+    // FIXME: This will need to be updated when IPv6 socket arrives. Perhaps a
+    //        base class for all address types is appropriate.
+    static ErrorOr<IPv4Address> resolve_host(ByteString const&, SocketType);
 
-    enum class PreventSIGPIPE {
-        No,
-        Yes,
-    };
+    Function<void()> on_ready_to_read;
 
 protected:
     enum class SocketDomain {
@@ -59,20 +68,12 @@ protected:
         Inet,
     };
 
-    enum class SocketType {
-        Stream,
-        Datagram,
-    };
-
-    Socket(PreventSIGPIPE prevent_sigpipe = PreventSIGPIPE::No)
+    explicit Socket(PreventSIGPIPE prevent_sigpipe = PreventSIGPIPE::Yes)
         : m_prevent_sigpipe(prevent_sigpipe == PreventSIGPIPE::Yes)
     {
     }
 
     static ErrorOr<int> create_fd(SocketDomain, SocketType);
-    // FIXME: This will need to be updated when IPv6 socket arrives. Perhaps a
-    //        base class for all address types is appropriate.
-    static ErrorOr<IPv4Address> resolve_host(ByteString const&, SocketType);
 
     static ErrorOr<void> connect_local(int fd, ByteString const& path);
     static ErrorOr<void> connect_inet(int fd, SocketAddress const&);
@@ -86,7 +87,7 @@ protected:
     }
 
 private:
-    bool m_prevent_sigpipe { false };
+    bool m_prevent_sigpipe { true };
 };
 
 /// A reusable socket maintains state about being connected in addition to
@@ -133,6 +134,7 @@ public:
     ErrorOr<size_t> write(ReadonlyBytes, int flags);
 
     bool is_eof() const { return !is_open() || m_last_read_was_eof; }
+    void did_reach_eof_on_read();
     bool is_open() const { return m_fd != -1; }
     void close();
 
@@ -157,6 +159,9 @@ public:
     static ErrorOr<NonnullOwnPtr<TCPSocket>> connect(ByteString const& host, u16 port);
     static ErrorOr<NonnullOwnPtr<TCPSocket>> connect(SocketAddress const& address);
     static ErrorOr<NonnullOwnPtr<TCPSocket>> adopt_fd(int fd);
+
+    static Coroutine<ErrorOr<NonnullOwnPtr<TCPSocket>>> async_connect(ByteString const& host, u16 port);
+    static Coroutine<ErrorOr<NonnullOwnPtr<TCPSocket>>> async_connect(SocketAddress const& address);
 
     TCPSocket(TCPSocket&& other)
         : Socket(static_cast<Socket&&>(other))
@@ -194,7 +199,7 @@ public:
     virtual ~TCPSocket() override { close(); }
 
 private:
-    TCPSocket(PreventSIGPIPE prevent_sigpipe = PreventSIGPIPE::No)
+    explicit TCPSocket(PreventSIGPIPE prevent_sigpipe = PreventSIGPIPE::Yes)
         : Socket(prevent_sigpipe)
     {
     }
@@ -243,8 +248,7 @@ public:
             // With UDP datagrams, reading a datagram into a buffer that's
             // smaller than the datagram's size will cause the rest of the
             // datagram to be discarded. That's not very nice, so let's bail
-            // early, telling the caller that he should allocate a bigger
-            // buffer.
+            // early, telling the caller to allocate a bigger buffer.
             return Error::from_errno(EMSGSIZE);
         }
 
@@ -268,7 +272,7 @@ public:
     virtual ~UDPSocket() override { close(); }
 
 private:
-    UDPSocket(PreventSIGPIPE prevent_sigpipe = PreventSIGPIPE::No)
+    explicit UDPSocket(PreventSIGPIPE prevent_sigpipe = PreventSIGPIPE::Yes)
         : Socket(prevent_sigpipe)
     {
     }
@@ -289,8 +293,8 @@ private:
 
 class LocalSocket final : public Socket {
 public:
-    static ErrorOr<NonnullOwnPtr<LocalSocket>> connect(ByteString const& path, PreventSIGPIPE = PreventSIGPIPE::No);
-    static ErrorOr<NonnullOwnPtr<LocalSocket>> adopt_fd(int fd, PreventSIGPIPE = PreventSIGPIPE::No);
+    static ErrorOr<NonnullOwnPtr<LocalSocket>> connect(ByteString const& path, PreventSIGPIPE = PreventSIGPIPE::Yes);
+    static ErrorOr<NonnullOwnPtr<LocalSocket>> adopt_fd(int fd, PreventSIGPIPE = PreventSIGPIPE::Yes);
 
     LocalSocket(LocalSocket&& other)
         : Socket(static_cast<Socket&&>(other))
@@ -327,6 +331,10 @@ public:
 
     ErrorOr<int> receive_fd(int flags);
     ErrorOr<void> send_fd(int fd);
+
+    ErrorOr<Bytes> receive_message(Bytes buffer, int flags, Vector<int>& fds);
+    ErrorOr<ssize_t> send_message(ReadonlyBytes msg, int flags, Vector<int, 1> fds = {});
+
     ErrorOr<pid_t> peer_pid() const;
     ErrorOr<Bytes> read_without_waiting(Bytes buffer);
 
@@ -342,7 +350,7 @@ public:
     virtual ~LocalSocket() { close(); }
 
 private:
-    LocalSocket(PreventSIGPIPE prevent_sigpipe = PreventSIGPIPE::No)
+    explicit LocalSocket(PreventSIGPIPE prevent_sigpipe = PreventSIGPIPE::Yes)
         : Socket(prevent_sigpipe)
     {
     }

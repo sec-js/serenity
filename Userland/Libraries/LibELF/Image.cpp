@@ -128,14 +128,8 @@ bool Image::parse()
         return false;
     }
 
-    auto result_or_error = validate_program_headers(header(), m_size, { m_buffer, m_size }, nullptr, nullptr, m_verbose_logging);
-    if (result_or_error.is_error()) {
-        if (m_verbose_logging)
-            dbgln("ELF::Image::parse(): Failed validating ELF Program Headers");
-        m_valid = false;
-        return false;
-    }
-    if (!result_or_error.value()) {
+    [[maybe_unused]] Optional<Elf_Phdr> interpreter_path_program_header {};
+    if (!validate_program_headers(header(), m_size, { m_buffer, m_size }, interpreter_path_program_header, nullptr, m_verbose_logging)) {
         if (m_verbose_logging)
             dbgln("ELF::Image::parse(): ELF Program Headers not valid");
         m_valid = false;
@@ -175,7 +169,7 @@ StringView Image::table_string(unsigned table_index, unsigned offset) const
             dbgln("SHENANIGANS! Image::table_string() computed offset outside image.");
         return {};
     }
-    size_t max_length = min(m_size - computed_offset, (size_t)PAGE_SIZE);
+    size_t max_length = min(m_size - computed_offset, (size_t)SERENITY_PAGE_SIZE);
     size_t length = strnlen(raw_data(sh.sh_offset + offset), max_length);
     return { raw_data(sh.sh_offset + offset), length };
 }
@@ -243,22 +237,9 @@ Image::ProgramHeader Image::program_header(unsigned index) const
 Image::Relocation Image::RelocationSection::relocation(unsigned index) const
 {
     VERIFY(index < relocation_count());
-    auto* rels = reinterpret_cast<Elf_Rel const*>(m_image.raw_data(offset()));
-    return Relocation(m_image, rels[index]);
-}
-
-Optional<Image::RelocationSection> Image::Section::relocations() const
-{
-    StringBuilder builder;
-    builder.append(".rel"sv);
-    builder.append(name());
-
-    auto relocation_section = m_image.lookup_section(builder.string_view());
-    if (!relocation_section.has_value())
-        return {};
-
-    dbgln_if(ELF_IMAGE_DEBUG, "Found relocations for {} in {}", name(), relocation_section.value().name());
-    return static_cast<RelocationSection>(relocation_section.value());
+    unsigned offset_in_section = index * entry_size();
+    auto relocation_address = bit_cast<Elf_Rela*>(m_image.raw_data(offset() + offset_in_section));
+    return Relocation(m_image, *relocation_address, addend_used());
 }
 
 Optional<Image::Section> Image::lookup_section(StringView name) const
@@ -421,12 +402,13 @@ Optional<Image::Symbol> Image::find_symbol(FlatPtr address, u32* out_offset) con
 NEVER_INLINE void Image::sort_symbols() const
 {
     m_sorted_symbols.ensure_capacity(symbol_count());
-    bool const is_aarch64 = header().e_machine == EM_AARCH64;
-    for_each_symbol([this, is_aarch64](auto const& symbol) {
-        // The AArch64 ABI marks the boundaries of literal pools in a function with $x/$d.
+    bool const is_aarch64_or_riscv = header().e_machine == EM_AARCH64 || header().e_machine == EM_RISCV;
+    for_each_symbol([this, is_aarch64_or_riscv](auto const& symbol) {
+        // The AArch64 and RISC-V ABIs mark the boundaries of literal pools in a function with $x/$d.
         // https://github.com/ARM-software/abi-aa/blob/2023q1-release/aaelf64/aaelf64.rst#mapping-symbols
+        // https://github.com/riscv-non-isa/riscv-elf-psabi-doc/blob/master/riscv-elf.adoc#mapping-symbol
         // Skip them so we don't accidentally print these instead of function names.
-        if (is_aarch64 && (symbol.name().starts_with("$x"sv) || symbol.name().starts_with("$d"sv)))
+        if (is_aarch64_or_riscv && (symbol.name().starts_with("$x"sv) || symbol.name().starts_with("$d"sv)))
             return;
         // STT_SECTION has the same address as the first function in the section, but shows up as the empty string.
         if (symbol.type() == STT_SECTION)

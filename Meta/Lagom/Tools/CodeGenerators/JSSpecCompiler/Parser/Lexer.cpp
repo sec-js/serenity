@@ -4,16 +4,17 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/GenericLexer.h>
 #include <AK/NonnullOwnPtr.h>
+#include <LibXML/Parser/Parser.h>
 
 #include "Parser/Lexer.h"
+#include "Parser/SpecificationParsing.h"
 #include "Parser/XMLUtils.h"
 
 namespace JSSpecCompiler {
 
 namespace {
-Optional<Token> consume_number(GenericLexer& lexer, XML::Node const* node)
+Optional<Token> consume_number(LineTrackingLexer& lexer, Location& location)
 {
     u64 start = lexer.tell();
 
@@ -35,127 +36,221 @@ Optional<Token> consume_number(GenericLexer& lexer, XML::Node const* node)
 
     auto length = lexer.tell() - start;
     lexer.retreat(length);
-    return { Token { TokenType::Number, lexer.consume(length), node } };
+    return { Token { TokenType::Number, lexer.consume(length), move(location) } };
 }
 
 bool can_end_word_token(char c)
 {
     return is_ascii_space(c) || ".,"sv.contains(c);
 }
-}
 
-ParseErrorOr<void> tokenize_string(XML::Node const* node, StringView view, Vector<Token>& tokens)
+void tokenize_string(SpecificationParsingContext& ctx, XML::Node const* node, StringView view, Vector<Token>& tokens)
 {
-#define CONSUME_IF_NEXT(view, type)                                      \
-    if (lexer.next_is(view##sv)) {                                       \
-        size_t length = __builtin_strlen(view);                          \
-        tokens.append({ TokenType::type, lexer.consume(length), node }); \
-        continue;                                                        \
-    }
+    static constexpr struct {
+        StringView text_to_match;
+        TokenType token_type;
+    } choices[] = {
+        { "-"sv, TokenType::AmbiguousMinus },
+        { "}"sv, TokenType::BraceClose },
+        { "{"sv, TokenType::BraceOpen },
+        { ":"sv, TokenType::Colon },
+        { ","sv, TokenType::Comma },
+        { "/"sv, TokenType::Division },
+        { ". "sv, TokenType::Dot },
+        { ".\n"sv, TokenType::Dot },
+        { "="sv, TokenType::Equals },
+        { "is equal to"sv, TokenType::Equals },
+        { "!"sv, TokenType::ExclamationMark },
+        { ">"sv, TokenType::Greater },
+        { "is"sv, TokenType::Is },
+        { "<"sv, TokenType::Less },
+        { "»"sv, TokenType::ListEnd },
+        { "«"sv, TokenType::ListStart },
+        { "."sv, TokenType::MemberAccess },
+        { "×"sv, TokenType::Multiplication },
+        { "is not equal to"sv, TokenType::NotEquals },
+        { "≠"sv, TokenType::NotEquals },
+        { ")"sv, TokenType::ParenClose },
+        { "("sv, TokenType::ParenOpen },
+        { "+"sv, TokenType::Plus },
+        { "?"sv, TokenType::QuestionMark },
+        { "]"sv, TokenType::SquareBracketClose },
+        { "["sv, TokenType::SquareBracketOpen },
+        { "NewTarget"sv, TokenType::WellKnownValue },
+    };
 
-    GenericLexer lexer(view);
+    LineTrackingLexer lexer(view, node->offset);
+
     while (!lexer.is_eof()) {
         lexer.ignore_while(is_ascii_space);
 
-        if (auto result = consume_number(lexer, node); result.has_value()) {
+        // FIXME: This is incorrect since we count text offset after XML reference resolution. To do
+        //        this properly, we need support from XML::Parser.
+        Location token_location = ctx.location_from_xml_offset(lexer.position_for(lexer.tell()));
+
+        if (auto result = consume_number(lexer, token_location); result.has_value()) {
             tokens.append(result.release_value());
             continue;
         }
 
-        CONSUME_IF_NEXT("(", ParenOpen);
-        CONSUME_IF_NEXT(")", ParenClose);
-        CONSUME_IF_NEXT("{", BraceOpen);
-        CONSUME_IF_NEXT("}", BraceClose);
-        CONSUME_IF_NEXT(",", Comma);
-        CONSUME_IF_NEXT(". ", Dot);
-        CONSUME_IF_NEXT(".\n", Dot);
-        CONSUME_IF_NEXT(":", Colon);
-        CONSUME_IF_NEXT(".", MemberAccess);
-        CONSUME_IF_NEXT("<", Less);
-        CONSUME_IF_NEXT(">", Greater);
-        CONSUME_IF_NEXT("is not equal to", NotEquals);
-        CONSUME_IF_NEXT("≠", NotEquals);
-        CONSUME_IF_NEXT("is equal to", Equals);
-        CONSUME_IF_NEXT("=", Equals);
-        CONSUME_IF_NEXT("+", Plus);
-        CONSUME_IF_NEXT("-", AmbiguousMinus);
-        CONSUME_IF_NEXT("×", Multiplication);
-        CONSUME_IF_NEXT("/", Division);
-        CONSUME_IF_NEXT("!", ExclamationMark);
-        CONSUME_IF_NEXT("is", Is);
+        bool matched = false;
+        for (auto const& [text_to_match, token_type] : choices) {
+            if (lexer.consume_specific(text_to_match)) {
+                tokens.append({ token_type, text_to_match, move(token_location) });
+                matched = true;
+                break;
+            }
+        }
+        if (matched)
+            continue;
 
         StringView word = lexer.consume_until(can_end_word_token);
         if (word.length())
-            tokens.append({ TokenType::Word, word, node });
+            tokens.append({ TokenType::Word, word, move(token_location) });
     }
-    return {};
-
-#undef CONSUME_IF_NEXT
 }
 
-ParseErrorOr<TokenizeTreeResult> tokenize_tree(XML::Node const* node, bool allow_substeps)
+enum class TreeType {
+    AlgorithmStep,
+    NestedExpression,
+    Header,
+};
+
+struct TokenizerState {
+    Vector<Token> tokens;
+    XML::Node const* substeps = nullptr;
+    bool has_errors = false;
+};
+
+void tokenize_tree(SpecificationParsingContext& ctx, TokenizerState& state, XML::Node const* node, TreeType tree_type)
 {
-    TokenizeTreeResult result;
-    auto& tokens = result.tokens;
+    // FIXME: Use structured binding once macOS Lagom CI updates to Clang >= 16.
+    auto& tokens = state.tokens;
+    auto& substeps = state.substeps;
+    auto& has_errors = state.has_errors;
 
     for (auto const& child : node->as_element().children) {
-        TRY(child->content.visit(
-            [&](XML::Node::Element const& element) -> ParseErrorOr<void> {
-                if (result.substeps != nullptr)
-                    return ParseError::create("Substeps list must be the last non-empty child"sv, child);
+        if (has_errors)
+            break;
 
-                if (element.name == tag_var) {
-                    tokens.append({ TokenType::Identifier, TRY(get_text_contents(child)), child });
-                    return {};
+        child->content.visit(
+            [&](XML::Node::Element const& element) -> void {
+                Location child_location = ctx.location_from_xml_offset(child->offset);
+                auto report_error = [&]<typename... Parameters>(AK::CheckedFormatString<Parameters...>&& fmt, Parameters const&... parameters) {
+                    ctx.diag().error(child_location, move(fmt), parameters...);
+                    has_errors = true;
+                };
+
+                if (substeps) {
+                    report_error("substeps list must be the last child of algorithm step");
+                    return;
                 }
 
-                if (element.name == tag_span) {
-                    auto element_class = TRY(get_attribute_by_name(child, attribute_class));
-                    if (element_class != class_secnum)
-                        return ParseError::create(String::formatted("Expected 'secnum' as a class name of <span>, but found '{}'", element_class), child);
-                    tokens.append({ TokenType::SectionNumber, TRY(get_text_contents(child)), child });
-                    return {};
+                if (element.name == tag_var) {
+                    auto variable_name = get_text_contents(child);
+                    if (!variable_name.has_value())
+                        report_error("malformed <var> subtree, expected single text child node");
+
+                    tokens.append({ TokenType::Identifier, variable_name.value_or(""sv), move(child_location) });
+                    return;
                 }
 
                 if (element.name == tag_emu_val) {
-                    auto contents = TRY(get_text_contents(child));
+                    auto maybe_contents = get_text_contents(child);
+                    if (!maybe_contents.has_value())
+                        report_error("malformed <emu-val> subtree, expected single text child node");
+
+                    auto contents = maybe_contents.value_or(""sv);
+
                     if (contents.length() >= 2 && contents.starts_with('"') && contents.ends_with('"'))
-                        tokens.append({ TokenType::String, contents.substring_view(1, contents.length() - 2), child });
-                    else if (contents == "undefined")
-                        tokens.append({ TokenType::Undefined, contents, child });
+                        tokens.append({ TokenType::String, contents.substring_view(1, contents.length() - 2), move(child_location) });
+                    else if (contents.is_one_of("undefined", "null", "this", "true", "false"))
+                        tokens.append({ TokenType::WellKnownValue, contents, move(child_location) });
                     else
-                        tokens.append({ TokenType::Identifier, contents, child });
-                    return {};
+                        tokens.append({ TokenType::Identifier, contents, move(child_location) });
+                    return;
                 }
 
                 if (element.name == tag_emu_xref) {
-                    auto contents = TRY(get_text_contents(TRY(get_only_child(child, "a"sv))));
-                    tokens.append({ TokenType::Identifier, contents, child });
-                    return {};
+                    auto identifier = get_single_child_with_tag(child, "a"sv).map([](XML::Node const* node) {
+                        return get_text_contents(node).value_or(""sv);
+                    });
+                    if (!identifier.has_value() || identifier.value().is_empty())
+                        report_error("malformed <emu-xref> subtree, expected <a> with nested single text node");
+
+                    tokens.append({ TokenType::Identifier, identifier.value_or(""sv), move(child_location) });
+                    return;
                 }
 
-                if (element.name == tag_ol) {
-                    if (!allow_substeps)
-                        return ParseError::create("Found nested list but substeps are not allowed"sv, child);
-                    result.substeps = child;
-                    return {};
+                if (element.name == tag_sup) {
+                    tokens.append({ TokenType::Superscript, ""sv, move(child_location) });
+                    tokens.append({ TokenType::ParenOpen, ""sv, move(child_location) });
+                    tokenize_tree(ctx, state, child, TreeType::NestedExpression);
+                    tokens.append({ TokenType::ParenClose, ""sv, move(child_location) });
+                    return;
                 }
 
-                return ParseError::create(String::formatted("Unexpected child element with tag {}", element.name), child);
+                if (element.name == tag_emu_const) {
+                    auto maybe_contents = get_text_contents(child);
+                    if (!maybe_contents.has_value())
+                        report_error("malformed <emu-const> subtree, expected single text child node");
+
+                    tokens.append({ TokenType::Enumerator, maybe_contents.value_or(""sv), move(child_location) });
+                    return;
+                }
+
+                if (tree_type == TreeType::Header && element.name == tag_span) {
+                    auto element_class = get_attribute_by_name(child, attribute_class);
+                    if (element_class != class_secnum)
+                        report_error("expected <span> to have class='secnum' attribute");
+
+                    auto section_number = get_text_contents(child);
+                    if (!section_number.has_value())
+                        report_error("malformed section number span subtree, expected single text child node");
+
+                    tokens.append({ TokenType::SectionNumber, section_number.value_or(""sv), move(child_location) });
+                    return;
+                }
+
+                if (tree_type == TreeType::AlgorithmStep && element.name == tag_ol) {
+                    substeps = child;
+                    return;
+                }
+
+                report_error("<{}> should not be a child of algorithm step", element.name);
             },
-            [&](XML::Node::Text const& text) -> ParseErrorOr<void> {
+            [&](XML::Node::Text const& text) {
                 auto view = text.builder.string_view();
-                if (result.substeps && !contains_empty_text(child))
-                    return ParseError::create("Substeps list must be the last non-empty child"sv, child);
-                return tokenize_string(child, view, tokens);
+                if (substeps != nullptr && !contains_empty_text(child)) {
+                    ctx.diag().error(ctx.location_from_xml_offset(child->offset),
+                        "substeps list must be the last child of algorithm step");
+                } else {
+                    tokenize_string(ctx, child, view, tokens);
+                }
             },
-            move(ignore_comments)));
+            [&](auto const&) {});
     }
 
-    if (tokens.size() && tokens.last().type == TokenType::MemberAccess)
+    if (tree_type == TreeType::AlgorithmStep && tokens.size() && tokens.last().type == TokenType::MemberAccess)
         tokens.last().type = TokenType::Dot;
+}
+}
 
-    return result;
+StepTokenizationResult tokenize_step(SpecificationParsingContext& ctx, XML::Node const* node)
+{
+    TokenizerState state;
+    tokenize_tree(ctx, state, node, TreeType::AlgorithmStep);
+    return {
+        .tokens = state.has_errors ? OptionalNone {} : Optional<Vector<Token>> { move(state.tokens) },
+        .substeps = state.substeps,
+    };
+}
+
+Optional<Vector<Token>> tokenize_header(SpecificationParsingContext& ctx, XML::Node const* node)
+{
+    TokenizerState state;
+    tokenize_tree(ctx, state, node, TreeType::Header);
+    return state.has_errors ? OptionalNone {} : Optional<Vector<Token>> { state.tokens };
 }
 
 }

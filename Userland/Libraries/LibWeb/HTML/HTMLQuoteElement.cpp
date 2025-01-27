@@ -6,6 +6,7 @@
 
 #include <AK/Assertions.h>
 #include <LibWeb/ARIA/Roles.h>
+#include <LibWeb/Bindings/HTMLQuoteElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/HTML/HTMLQuoteElement.h>
 
@@ -23,7 +24,7 @@ HTMLQuoteElement::~HTMLQuoteElement() = default;
 void HTMLQuoteElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLQuoteElementPrototype>(realm, "HTMLQuoteElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLQuoteElement);
 }
 
 Optional<ARIA::Role> HTMLQuoteElement::default_role() const

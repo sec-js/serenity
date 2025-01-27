@@ -20,9 +20,9 @@ class SVGPathElement final : public SVGGeometryElement {
 public:
     virtual ~SVGPathElement() override = default;
 
-    virtual void attribute_changed(FlyString const& name, Optional<String> const& value) override;
+    virtual void attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value) override;
 
-    virtual Gfx::Path& get_path() override;
+    virtual Gfx::Path get_path(CSSPixelSize viewport_size) override;
 
 private:
     SVGPathElement(DOM::Document&, DOM::QualifiedName);
@@ -30,7 +30,6 @@ private:
     virtual void initialize(JS::Realm&) override;
 
     Vector<PathInstruction> m_instructions;
-    Optional<Gfx::Path> m_path;
 };
 
 Gfx::Path path_from_path_instructions(ReadonlySpan<PathInstruction>);

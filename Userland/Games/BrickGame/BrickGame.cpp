@@ -509,8 +509,10 @@ void BrickGame::keydown_event(GUI::KeyEvent& event)
         break;
     }
 
-    if (m_brick_game->state() == Bricks::GameState::Paused)
+    if (m_brick_game->state() == Bricks::GameState::Paused) {
+        event.ignore();
         return;
+    }
 
     Bricks::RenderRequest render_request { Bricks::RenderRequest::SkipRender };
     switch (event.key()) {
@@ -530,6 +532,7 @@ void BrickGame::keydown_event(GUI::KeyEvent& event)
         render_request = m_brick_game->rotate_right();
         break;
     case KeyCode::Key_E:
+    case KeyCode::Key_Z:
         render_request = m_brick_game->rotate_left();
         break;
     case KeyCode::Key_S:

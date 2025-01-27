@@ -29,9 +29,9 @@ public:
     {
         m_label->set_text(move(tooltip));
         int tooltip_width = m_label->effective_min_size().width().as_int() + 10;
-        int line_count = m_label->text().count("\n"sv);
+        int line_count = m_label->text().bytes_as_string_view().count_lines();
         int font_size = m_label->font().pixel_size_rounded_up();
-        int tooltip_height = font_size * (1 + line_count) + ((font_size + 1) / 2) * line_count + 8;
+        int tooltip_height = font_size * line_count + ((font_size + 1) / 2) * (line_count - 1) + 8;
 
         Gfx::IntRect desktop_rect = Desktop::the().rect();
         if (tooltip_width > desktop_rect.width())
@@ -98,13 +98,13 @@ ErrorOr<NonnullRefPtr<Application>> Application::create(Main::Arguments const& a
             TRY(application->m_args.try_append(arg));
     }
 
-    application->m_tooltip_show_timer = TRY(Core::Timer::create_single_shot(700, [weak_application = application->make_weak_ptr<Application>()] {
+    application->m_tooltip_show_timer = Core::Timer::create_single_shot(700, [weak_application = application->make_weak_ptr<Application>()] {
         weak_application->request_tooltip_show();
-    }));
+    });
 
-    application->m_tooltip_hide_timer = TRY(Core::Timer::create_single_shot(50, [weak_application = application->make_weak_ptr<Application>()] {
+    application->m_tooltip_hide_timer = Core::Timer::create_single_shot(50, [weak_application = application->make_weak_ptr<Application>()] {
         weak_application->tooltip_hide_timer_did_fire();
-    }));
+    });
 
     return application;
 }
@@ -212,7 +212,7 @@ void Application::set_system_palette(Core::AnonymousBuffer& buffer)
     if (!m_system_palette)
         m_system_palette = Gfx::PaletteImpl::create_with_anonymous_buffer(buffer);
     else
-        m_system_palette->replace_internal_buffer({}, buffer);
+        m_system_palette->replace_internal_buffer(buffer);
 
     if (!m_palette)
         m_palette = m_system_palette;
@@ -283,7 +283,7 @@ void Application::set_pending_drop_widget(Widget* widget)
         m_pending_drop_widget->update();
 }
 
-void Application::set_drag_hovered_widget_impl(Widget* widget, Gfx::IntPoint position, Vector<String> mime_types)
+void Application::set_drag_hovered_widget_impl(Widget* widget, Gfx::IntPoint position, Optional<DragEvent const&> drag_event)
 {
     if (widget == m_drag_hovered_widget)
         return;
@@ -296,8 +296,8 @@ void Application::set_drag_hovered_widget_impl(Widget* widget, Gfx::IntPoint pos
     set_pending_drop_widget(nullptr);
     m_drag_hovered_widget = widget;
 
-    if (m_drag_hovered_widget) {
-        DragEvent enter_event(Event::DragEnter, position, move(mime_types));
+    if (m_drag_hovered_widget && drag_event.has_value()) {
+        DragEvent enter_event(Event::DragEnter, position, drag_event->button(), drag_event->buttons(), drag_event->modifiers(), drag_event->text(), drag_event->mime_data());
         enter_event.ignore();
         m_drag_hovered_widget->dispatch_event(enter_event, m_drag_hovered_widget->window());
         if (enter_event.is_accepted())
@@ -373,6 +373,7 @@ void Application::update_recent_file_actions()
 
 void Application::set_most_recently_open_file(ByteString new_path)
 {
+    VERIFY(!new_path.is_empty());
     Vector<ByteString> new_recent_files_list;
 
     for (size_t i = 0; i < max_recently_open_files(); ++i) {
@@ -387,6 +388,7 @@ void Application::set_most_recently_open_file(ByteString new_path)
     });
 
     new_recent_files_list.prepend(new_path);
+    new_recent_files_list.resize(max_recently_open_files());
 
     for (size_t i = 0; i < max_recently_open_files(); ++i) {
         auto& path = new_recent_files_list[i];

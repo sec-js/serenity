@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLPictureElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/HTML/HTMLPictureElement.h>
 
@@ -21,7 +22,7 @@ HTMLPictureElement::~HTMLPictureElement() = default;
 void HTMLPictureElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::HTMLPictureElementPrototype>(realm, "HTMLPictureElement"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLPictureElement);
 }
 
 }

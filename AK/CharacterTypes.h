@@ -60,9 +60,14 @@ constexpr bool is_ascii_octal_digit(u32 code_point)
     return code_point >= '0' && code_point <= '7';
 }
 
+constexpr bool is_ascii_uppercase_hex_digit(u32 code_point)
+{
+    return is_ascii_digit(code_point) || (code_point >= 'A' && code_point <= 'F');
+}
+
 constexpr bool is_ascii_hex_digit(u32 code_point)
 {
-    return is_ascii_digit(code_point) || (code_point >= 'A' && code_point <= 'F') || (code_point >= 'a' && code_point <= 'f');
+    return is_ascii_uppercase_hex_digit(code_point) || (code_point >= 'a' && code_point <= 'f');
 }
 
 constexpr bool is_ascii_blank(u32 code_point)
@@ -93,6 +98,12 @@ constexpr bool is_ascii_printable(u32 code_point)
 constexpr bool is_ascii_c0_control(u32 code_point)
 {
     return code_point < 0x20;
+}
+
+// https://infra.spec.whatwg.org/#c0-control-or-space
+constexpr bool is_ascii_c0_control_or_space(u32 code_point)
+{
+    return code_point <= 0x20;
 }
 
 constexpr bool is_ascii_control(u32 code_point)
@@ -185,6 +196,7 @@ using AK::is_ascii_base36_digit;
 using AK::is_ascii_binary_digit;
 using AK::is_ascii_blank;
 using AK::is_ascii_c0_control;
+using AK::is_ascii_c0_control_or_space;
 using AK::is_ascii_control;
 using AK::is_ascii_digit;
 using AK::is_ascii_graphical;
@@ -195,6 +207,7 @@ using AK::is_ascii_printable;
 using AK::is_ascii_punctuation;
 using AK::is_ascii_space;
 using AK::is_ascii_upper_alpha;
+using AK::is_ascii_uppercase_hex_digit;
 using AK::is_unicode;
 using AK::is_unicode_control;
 using AK::is_unicode_noncharacter;

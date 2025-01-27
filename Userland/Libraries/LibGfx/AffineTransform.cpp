@@ -12,16 +12,6 @@
 
 namespace Gfx {
 
-bool AffineTransform::is_identity() const
-{
-    return m_values[0] == 1 && m_values[1] == 0 && m_values[2] == 0 && m_values[3] == 1 && m_values[4] == 0 && m_values[5] == 0;
-}
-
-bool AffineTransform::is_identity_or_translation() const
-{
-    return a() == 1 && b() == 0 && c() == 0 && d() == 1;
-}
-
 float AffineTransform::x_scale() const
 {
     return AK::hypot(m_values[0], m_values[1]);
@@ -89,6 +79,11 @@ AffineTransform& AffineTransform::skew_radians(float x_radians, float y_radians)
 
 AffineTransform& AffineTransform::translate(float tx, float ty)
 {
+    if (is_identity_or_translation()) {
+        m_values[4] += tx;
+        m_values[5] += ty;
+        return *this;
+    }
     m_values[4] += tx * m_values[0] + ty * m_values[2];
     m_values[5] += tx * m_values[1] + ty * m_values[3];
     return *this;
@@ -113,6 +108,8 @@ AffineTransform& AffineTransform::set_translation(FloatPoint t)
 
 AffineTransform& AffineTransform::multiply(AffineTransform const& other)
 {
+    if (other.is_identity())
+        return *this;
     AffineTransform result;
     result.m_values[0] = other.a() * a() + other.b() * c();
     result.m_values[1] = other.a() * b() + other.b() * d();
@@ -208,6 +205,12 @@ static T largest_of(T p1, T p2, T p3, T p4)
 template<>
 FloatRect AffineTransform::map(FloatRect const& rect) const
 {
+    if (is_identity()) {
+        return rect;
+    }
+    if (is_identity_or_translation()) {
+        return rect.translated(e(), f());
+    }
     FloatPoint p1 = map(rect.top_left());
     FloatPoint p2 = map(rect.top_right());
     FloatPoint p3 = map(rect.bottom_right());

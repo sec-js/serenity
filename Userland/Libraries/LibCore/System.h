@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2021-2022, Kenneth Myhra <kennethmyhra@serenityos.org>
- * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
+ * Copyright (c) 2021-2024, Sam Atkins <atkinssj@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -22,6 +22,7 @@
 #include <signal.h>
 #include <spawn.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -31,11 +32,7 @@
 #include <time.h>
 #include <utime.h>
 
-#ifdef AK_OS_SERENITY
-#    include <Kernel/API/Jail.h>
-#endif
-
-#if !defined(AK_OS_BSD_GENERIC) && !defined(AK_OS_ANDROID)
+#if !defined(AK_OS_BSD_GENERIC)
 #    include <shadow.h>
 #endif
 
@@ -48,9 +45,15 @@
 #    include <ucred.h>
 #endif
 
+#ifdef AK_OS_SERENITY
+#    include <Kernel/API/Unshare.h>
+#endif
+
 namespace Core::System {
 
 #ifdef AK_OS_SERENITY
+ErrorOr<void> enter_jail_mode_until_exit();
+ErrorOr<void> enter_jail_mode_until_exec();
 ErrorOr<void> beep(u16 tone = 440, u16 milliseconds_duration = 200);
 ErrorOr<void> pledge(StringView promises, StringView execpromises = {});
 ErrorOr<void> unveil(StringView path, StringView permissions);
@@ -58,12 +61,13 @@ ErrorOr<void> unveil_after_exec(StringView path, StringView permissions);
 ErrorOr<void> sendfd(int sockfd, int fd);
 ErrorOr<int> recvfd(int sockfd, int options);
 ErrorOr<void> ptrace_peekbuf(pid_t tid, void const* tracee_addr, Bytes destination_buf);
-ErrorOr<void> mount(int source_fd, StringView target, StringView fs_type, int flags);
-ErrorOr<void> bindmount(int source_fd, StringView target, int flags);
+ErrorOr<void> mount(Optional<i32> vfs_context_id, int source_fd, StringView target, StringView fs_type, int flags);
+ErrorOr<void> bindmount(Optional<i32> vfs_context_id, int source_fd, StringView target, int flags);
+ErrorOr<void> copy_mount(Optional<i32> original_vfs_context_id, Optional<i32> target_vfs_context_id, StringView original_mountpoint, StringView target_mountpoint, int flags);
 ErrorOr<int> fsopen(StringView fs_type, int flags);
-ErrorOr<void> fsmount(int mount_fd, int source_fd, StringView target_path);
-ErrorOr<void> remount(StringView target, int flags);
-ErrorOr<void> umount(StringView mount_point);
+ErrorOr<void> fsmount(Optional<i32> vfs_context_id, int mount_fd, int source_fd, StringView target_path);
+ErrorOr<void> remount(Optional<i32> vfs_context_id, StringView target, int flags);
+ErrorOr<void> umount(Optional<i32> vfs_context_id, StringView mount_point);
 ErrorOr<long> ptrace(int request, pid_t tid, void* address, void* data);
 ErrorOr<void> disown(pid_t pid);
 ErrorOr<void> profiling_enable(pid_t, u64 event_mask);
@@ -100,7 +104,7 @@ ALWAYS_INLINE ErrorOr<void> unveil(nullptr_t, nullptr_t)
     return unveil(StringView {}, StringView {});
 }
 
-#if !defined(AK_OS_BSD_GENERIC) && !defined(AK_OS_ANDROID)
+#if !defined(AK_OS_BSD_GENERIC)
 ErrorOr<Optional<struct spwd>> getspent();
 ErrorOr<Optional<struct spwd>> getspnam(StringView name);
 #endif
@@ -127,6 +131,7 @@ ErrorOr<int> open(StringView path, int options, mode_t mode = 0);
 ErrorOr<int> openat(int fd, StringView path, int options, mode_t mode = 0);
 ErrorOr<void> close(int fd);
 ErrorOr<void> ftruncate(int fd, off_t length);
+ErrorOr<void> fsync(int fd);
 ErrorOr<struct stat> stat(StringView path);
 ErrorOr<struct stat> lstat(StringView path);
 ErrorOr<ssize_t> read(int fd, Bytes buffer);
@@ -152,7 +157,11 @@ ErrorOr<Optional<struct group>> getgrnam(StringView name);
 ErrorOr<Optional<struct passwd>> getpwuid(uid_t);
 ErrorOr<Optional<struct group>> getgrent(Span<char> buffer);
 ErrorOr<Optional<struct group>> getgrgid(gid_t);
+
+#if !defined(AK_OS_IOS)
 ErrorOr<void> clock_settime(clockid_t clock_id, struct timespec* ts);
+#endif
+
 ErrorOr<pid_t> posix_spawn(StringView path, posix_spawn_file_actions_t const* file_actions, posix_spawnattr_t const* attr, char* const arguments[], char* const envp[]);
 ErrorOr<pid_t> posix_spawnp(StringView path, posix_spawn_file_actions_t* const file_actions, posix_spawnattr_t* const attr, char* const arguments[], char* const envp[]);
 ErrorOr<off_t> lseek(int fd, off_t, int whence);
@@ -188,7 +197,7 @@ ErrorOr<void> utime(StringView path, Optional<struct utimbuf>);
 ErrorOr<void> utimensat(int fd, StringView path, struct timespec const times[2], int flag);
 ErrorOr<struct utsname> uname();
 ErrorOr<Array<int, 2>> pipe2(int flags);
-#if !defined(AK_OS_ANDROID) && !defined(AK_OS_HAIKU)
+#if !defined(AK_OS_HAIKU)
 ErrorOr<void> adjtime(const struct timeval* delta, struct timeval* old_delta);
 #endif
 enum class SearchInPath {
@@ -203,8 +212,8 @@ ErrorOr<void> exec_command(Vector<StringView>& command, bool preserve_env);
 ErrorOr<void> exec(StringView filename, ReadonlySpan<StringView> arguments, SearchInPath, Optional<ReadonlySpan<StringView>> environment = {});
 
 #ifdef AK_OS_SERENITY
-ErrorOr<void> join_jail(u64 jail_index);
-ErrorOr<u64> create_jail(StringView jail_name, JailIsolationFlags);
+ErrorOr<u32> unshare_create(Kernel::UnshareType type, unsigned flags);
+ErrorOr<void> unshare_attach(Kernel::UnshareType type, unsigned index);
 #endif
 
 ErrorOr<int> socket(int domain, int type, int protocol);
@@ -228,9 +237,6 @@ ErrorOr<Vector<gid_t>> getgroups();
 ErrorOr<void> setgroups(ReadonlySpan<gid_t>);
 ErrorOr<void> mknod(StringView pathname, mode_t mode, dev_t dev);
 ErrorOr<void> mkfifo(StringView pathname, mode_t mode);
-ErrorOr<void> setenv(StringView, StringView, bool);
-ErrorOr<void> unsetenv(StringView);
-ErrorOr<void> putenv(StringView);
 ErrorOr<int> posix_openpt(int flags);
 ErrorOr<void> grantpt(int fildes);
 ErrorOr<void> unlockpt(int fildes);
@@ -262,7 +268,11 @@ private:
     }
 
     struct AddrInfoDeleter {
-        void operator()(struct addrinfo* ptr) { ::freeaddrinfo(ptr); }
+        void operator()(struct addrinfo* ptr)
+        {
+            if (ptr)
+                ::freeaddrinfo(ptr);
+        }
     };
 
     Vector<struct addrinfo> m_addresses {};
@@ -275,12 +285,16 @@ ErrorOr<AddressInfoVector> getaddrinfo(char const* nodename, char const* servnam
 ErrorOr<void> posix_fallocate(int fd, off_t offset, off_t length);
 #endif
 
-ErrorOr<String> resolve_executable_from_environment(StringView filename, int flags = 0);
+unsigned hardware_concurrency();
+u64 physical_memory_bytes();
 
-char** environment();
+ErrorOr<String> resolve_executable_from_environment(StringView filename, int flags = 0);
 
 ErrorOr<ByteString> current_executable_path();
 
 ErrorOr<Bytes> allocate(size_t count, size_t size);
+
+ErrorOr<rlimit> get_resource_limits(int resource);
+ErrorOr<void> set_resource_limits(int resource, rlim_t limit);
 
 }

@@ -90,11 +90,6 @@ ErrorOr<void> SysFSInode::remove_child(StringView)
     return EROFS;
 }
 
-ErrorOr<void> SysFSInode::replace_child(StringView, Inode&)
-{
-    return EROFS;
-}
-
 ErrorOr<void> SysFSInode::chmod(mode_t)
 {
     return EPERM;
@@ -105,8 +100,9 @@ ErrorOr<void> SysFSInode::chown(UserID, GroupID)
     return EPERM;
 }
 
-ErrorOr<void> SysFSInode::truncate(u64 size)
+ErrorOr<void> SysFSInode::truncate_locked(u64 size)
 {
+    VERIFY(m_inode_lock.is_locked());
     return m_associated_component->truncate(size);
 }
 

@@ -45,8 +45,8 @@ public:
     Environment* outer_environment() { return m_outer_environment; }
     Environment const* outer_environment() const { return m_outer_environment; }
 
+    [[nodiscard]] bool is_declarative_environment() const { return m_declarative; }
     virtual bool is_global_environment() const { return false; }
-    virtual bool is_declarative_environment() const { return false; }
     virtual bool is_function_environment() const { return false; }
 
     template<typename T>
@@ -57,16 +57,18 @@ public:
     bool is_permanently_screwed_by_eval() const { return m_permanently_screwed_by_eval; }
     void set_permanently_screwed_by_eval();
 
-    static FlatPtr is_permanently_screwed_by_eval_offset() { return OFFSET_OF(Environment, m_permanently_screwed_by_eval); }
-    static FlatPtr outer_environment_offset() { return OFFSET_OF(Environment, m_outer_environment); }
-
 protected:
-    explicit Environment(Environment* parent);
+    enum class IsDeclarative {
+        No,
+        Yes,
+    };
+    explicit Environment(Environment* parent, IsDeclarative = IsDeclarative::No);
 
     virtual void visit_edges(Visitor&) override;
 
 private:
     bool m_permanently_screwed_by_eval { false };
+    bool m_declarative { false };
 
     GCPtr<Environment> m_outer_environment;
 };

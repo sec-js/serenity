@@ -6,6 +6,7 @@
  */
 
 #include <LibJS/Runtime/TypedArray.h>
+#include <LibWeb/Bindings/DOMMatrixPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Geometry/DOMMatrix.h>
 #include <LibWeb/HTML/Window.h>
@@ -118,6 +119,11 @@ JS::NonnullGCPtr<DOMMatrix> DOMMatrix::create_from_dom_matrix_read_only(JS::Real
     return realm.heap().allocate<DOMMatrix>(realm, realm, read_only_matrix);
 }
 
+JS::NonnullGCPtr<DOMMatrix> DOMMatrix::create(JS::Realm& realm)
+{
+    return realm.heap().allocate<DOMMatrix>(realm, realm);
+}
+
 DOMMatrix::DOMMatrix(JS::Realm& realm, double m11, double m12, double m21, double m22, double m41, double m42)
     : DOMMatrixReadOnly(realm, m11, m12, m21, m22, m41, m42)
 {
@@ -133,12 +139,17 @@ DOMMatrix::DOMMatrix(JS::Realm& realm, DOMMatrixReadOnly const& read_only_matrix
 {
 }
 
+DOMMatrix::DOMMatrix(JS::Realm& realm)
+    : DOMMatrixReadOnly(realm)
+{
+}
+
 DOMMatrix::~DOMMatrix() = default;
 
 void DOMMatrix::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::DOMMatrixPrototype>(realm, "DOMMatrix"_fly_string));
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(DOMMatrix);
 }
 
 // https://drafts.fxtf.org/geometry/#dom-dommatrix-frommatrix
@@ -529,12 +540,12 @@ JS::NonnullGCPtr<DOMMatrix> DOMMatrix::rotate_axis_angle_self(Optional<double> x
 JS::NonnullGCPtr<DOMMatrix> DOMMatrix::skew_x_self(double sx)
 {
     // 1. Post-multiply a skewX transformation on the current matrix by the specified angle sx in degrees. The 2D skewX matrix is described in CSS Transforms with alpha = sx in degrees. [CSS3-TRANSFORMS]
-    // clang-format off
-    Gfx::DoubleMatrix4x4 skew_matrix = { 1, tan(AK::to_radians(sx)), 0, 0,
+    Gfx::DoubleMatrix4x4 skew_matrix = {
+        1, tan(AK::to_radians(sx)), 0, 0,
         0, 1, 0, 0,
         0, 0, 1, 0,
-        0, 0, 0, 1 };
-    // clang-format on
+        0, 0, 0, 1
+    };
     m_matrix = m_matrix * skew_matrix;
 
     // 3. Return the current matrix.
@@ -545,12 +556,12 @@ JS::NonnullGCPtr<DOMMatrix> DOMMatrix::skew_x_self(double sx)
 JS::NonnullGCPtr<DOMMatrix> DOMMatrix::skew_y_self(double sy)
 {
     // 1. Post-multiply a skewX transformation on the current matrix by the specified angle sy in degrees. The 2D skewY matrix is described in CSS Transforms with beta = sy in degrees. [CSS3-TRANSFORMS]
-    // clang-format off
-    Gfx::DoubleMatrix4x4 skew_matrix = { 1, 0, 0, 0,
+    Gfx::DoubleMatrix4x4 skew_matrix = {
+        1, 0, 0, 0,
         tan(AK::to_radians(sy)), 1, 0, 0,
         0, 0, 1, 0,
-        0, 0, 0, 1 };
-    // clang-format on
+        0, 0, 0, 1
+    };
     m_matrix = m_matrix * skew_matrix;
 
     // 3. Return the current matrix.

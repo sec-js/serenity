@@ -14,6 +14,8 @@
 namespace Web::Painting {
 
 class StackingContext {
+    friend class ViewportPaintable;
+
 public:
     StackingContext(Paintable&, StackingContext* parent, size_t index_in_tree_order);
 
@@ -35,7 +37,8 @@ public:
     static void paint_node_as_stacking_context(Paintable const&, PaintContext&);
     static void paint_descendants(PaintContext&, Paintable const&, StackingContextPaintPhase);
     void paint(PaintContext&) const;
-    Optional<HitTestResult> hit_test(CSSPixelPoint, HitTestType) const;
+
+    [[nodiscard]] TraversalDecision hit_test(CSSPixelPoint, HitTestType, Function<TraversalDecision(HitTestResult)> const& callback) const;
 
     Gfx::AffineTransform affine_transform_matrix() const;
 
@@ -43,11 +46,17 @@ public:
 
     void sort();
 
+    void set_last_paint_generation_id(u64 generation_id);
+
 private:
     JS::NonnullGCPtr<Paintable> m_paintable;
     StackingContext* const m_parent { nullptr };
     Vector<StackingContext*> m_children;
     size_t m_index_in_tree_order { 0 };
+    Optional<u64> m_last_paint_generation_id;
+
+    Vector<JS::NonnullGCPtr<Paintable const>> m_positioned_descendants_with_stack_level_0_and_stacking_contexts;
+    Vector<JS::NonnullGCPtr<Paintable const>> m_non_positioned_floating_descendants;
 
     static void paint_child(PaintContext&, StackingContext const&);
     void paint_internal(PaintContext&) const;

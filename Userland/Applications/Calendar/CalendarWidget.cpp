@@ -7,6 +7,7 @@
 
 #include "CalendarWidget.h"
 #include "AddEventDialog.h"
+#include "ViewEventDialog.h"
 #include <AK/JsonParser.h>
 #include <AK/LexicalPath.h>
 #include <LibConfig/Client.h>
@@ -92,7 +93,7 @@ ErrorOr<NonnullRefPtr<CalendarWidget>> CalendarWidget::create(GUI::Window* paren
 
     file_menu->add_separator();
 
-    file_menu->add_action(GUI::CommonActions::make_quit_action([&](auto&) {
+    file_menu->add_action(GUI::CommonActions::make_quit_action([widget](auto&) {
         if (!widget->request_close())
             return;
         GUI::Application::the()->quit();
@@ -224,7 +225,10 @@ ErrorOr<NonnullRefPtr<GUI::Action>> CalendarWidget::create_new_calendar_action()
 NonnullRefPtr<GUI::Action> CalendarWidget::create_open_calendar_action()
 {
     return GUI::CommonActions::make_open_action([&](auto&) {
-        auto response = FileSystemAccessClient::Client::the().open_file(window());
+        GUI::FileTypeFilter calendar_files;
+        calendar_files.name = "Calendar Files";
+        calendar_files.extensions = Vector<ByteString> { "cal", "ics" };
+        auto response = FileSystemAccessClient::Client::the().open_file(window(), { .allowed_file_types = Vector { calendar_files, GUI::FileTypeFilter::all_files() } });
         if (response.is_error())
             return;
         (void)load_file(response.release_value());
@@ -298,8 +302,17 @@ ErrorOr<NonnullRefPtr<GUI::Action>> CalendarWidget::create_open_settings_action(
 void CalendarWidget::create_on_tile_doubleclick()
 {
     m_event_calendar->on_tile_doubleclick = [&] {
+        for (auto const& event : m_event_calendar->event_manager().events()) {
+            auto start = event.start;
+            auto selected_date = m_event_calendar->selected_date();
+
+            if (start.year() == selected_date.year() && start.month() == selected_date.month() && start.day() == selected_date.day()) {
+                ViewEventDialog::show(selected_date, m_event_calendar->event_manager(), window());
+                return;
+            }
+        }
+
         AddEventDialog::show(m_event_calendar->selected_date(), m_event_calendar->event_manager(), window());
     };
 }
-
 }

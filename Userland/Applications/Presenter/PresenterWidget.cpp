@@ -8,6 +8,7 @@
 #include "PresenterWidget.h"
 #include "Presentation.h"
 #include <LibCore/MimeData.h>
+#include <LibDesktop/Launcher.h>
 #include <LibFileSystemAccessClient/Client.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
@@ -23,7 +24,6 @@ PresenterWidget::PresenterWidget()
     set_fill_with_background_color(true);
     m_web_view = add<WebView::OutOfProcessWebView>();
     m_web_view->set_frame_style(Gfx::FrameStyle::NoFrame);
-    m_web_view->set_scrollbars_enabled(false);
     m_web_view->set_focus_policy(GUI::FocusPolicy::NoFocus);
     m_web_view->set_content_scales_to_viewport(true);
 }
@@ -118,6 +118,9 @@ ErrorOr<void> PresenterWidget::initialize_menubar()
     update_slides_actions();
 
     auto help_menu = window->add_menu("&Help"_string);
+    help_menu->add_action(GUI::CommonActions::make_help_action([](auto&) {
+        Desktop::Launcher::open(URL::create_with_file_scheme("/usr/share/man/man1/Applications/Presenter.md"), "/bin/Help");
+    }));
     help_menu->add_action(GUI::CommonActions::make_about_action("Presenter"_string, GUI::Icon::default_icon("app-presenter"sv)));
 
     return {};
@@ -202,8 +205,7 @@ void PresenterWidget::second_paint_event(GUI::PaintEvent& event)
 
 void PresenterWidget::drag_enter_event(GUI::DragEvent& event)
 {
-    auto const& mime_types = event.mime_types();
-    if (mime_types.contains_slow("text/uri-list"sv))
+    if (event.mime_data().has_urls())
         event.accept();
 }
 
@@ -217,6 +219,6 @@ void PresenterWidget::drop_event(GUI::DropEvent& event)
             return;
 
         window()->move_to_front();
-        set_file(urls.first().serialize_path());
+        set_file(URL::percent_decode(urls.first().serialize_path()));
     }
 }
